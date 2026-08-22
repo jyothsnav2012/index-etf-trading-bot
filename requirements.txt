@@ -1,0 +1,4 @@
+kiteconnect
+pandas
+requests
+pyotp
