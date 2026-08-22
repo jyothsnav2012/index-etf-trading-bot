@@ -1,0 +1,46 @@
+name: Automated Index Trading Bot
+
+on:
+  schedule:
+    # Runs Mon-Fri every 15 mins during market hours (03:45 UTC to 10:00 UTC)
+    - cron: '*/15 3-10 * * 1-5'
+  workflow_dispatch: # Allows manual one-click testing from GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Execute Multi-Agent Trading Engine
+        env:
+          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
+          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
+          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
+          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
+
+      - name: Auto-Commit Trade Database and Memory
+        run: |
+          git config --global user.name 'TradingBot-Runner'
+          git config --global user.email 'bot@actions.github.com'
+          git add trade_database.json strategy_memory.json holidays_cache.json
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update trade database & state [skip ci]"
+          git push
