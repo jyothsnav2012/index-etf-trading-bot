@@ -57,22 +57,27 @@ def save_json(filepath: str, data):
 # =====================================================================
 # 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
 # =====================================================================
+
 def send_telegram(message: str, reply_markup: dict = None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"Telegram Output:\n{message}")
+        print("❌ Telegram Error: Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secrets.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": str(TELEGRAM_CHAT_ID).strip(),
         "text": message,
         "parse_mode": "Markdown"
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
     try:
-        requests.post(url, json=payload, timeout=10)
+        res = requests.post(url, json=payload, timeout=10).json()
+        if not res.get("ok"):
+            print(f"❌ Telegram Send Failed: {res.get('description')}")
+        else:
+            print("✅ Telegram notification sent successfully.")
     except Exception as e:
-        print(f"Telegram Dispatch Error: {e}")
+        print(f"Telegram Dispatch Exception: {e}")
 
 def process_telegram_updates():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -81,6 +86,7 @@ def process_telegram_updates():
     try:
         res = requests.get(url, timeout=10).json()
         updates = res.get("result", [])
+        print(f"Telegram Polling: Found {len(updates)} pending updates.")
         if not updates:
             return
 
@@ -93,7 +99,7 @@ def process_telegram_updates():
             if "message" in item:
                 msg = item["message"]
                 text = msg.get("text", "").strip()
-                if text in ["/status", "/dashboard", "/pnl"]:
+                if text in ["/start", "/status", "/dashboard", "/pnl"]:
                     pos_text = ""
                     if not active_trades:
                         pos_text = "• *Active Slots:* 0/3 (100% Cash)\n"
