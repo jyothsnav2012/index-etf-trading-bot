@@ -350,24 +350,32 @@ def get_kite_session():
         print("✅ Step 2: 2FA TOTP verified.")
 
         # Step 3: OAuth Token Extraction
-        req_url = f"https://kite.zerodha.com/connect/login?api_key={api_key.strip()}&skip_session=true"
-        resp = session.get(req_url, timeout=10)
+        req_url = f"https://kite.zerodha.com/connect/login?api_key={api_key.strip()}&v=3"
+        resp = session.get(req_url, allow_redirects=True, timeout=10)
 
-        if "request_token=" not in resp.url:
-            print(f"❌ Step 3 Failed: Redirect URL was {resp.url}")
+        redirect_url = resp.url
+
+        # If Zerodha landed on the authorization/consent page, trigger the final redirect
+        if "connect/authorize" in redirect_url:
+            try:
+                # Disable automatic following so requests doesn't fail on 127.0.0.1 connection
+                auth_resp = session.get(redirect_url, allow_redirects=False, timeout=10)
+                if "Location" in auth_resp.headers:
+                    redirect_url = auth_resp.headers["Location"]
+                else:
+                    redirect_url = auth_resp.url
+            except Exception:
+                pass
+
+        if "request_token=" not in redirect_url:
+            print(f"❌ Step 3 Failed: Redirect URL was {redirect_url}")
             return None
 
-        request_token = resp.url.split("request_token=")[1].split("&")[0]
-        data = kite.generate_session(
-            request_token, api_secret=api_secret.strip()
-        )
+        request_token = redirect_url.split("request_token=")[1].split("&")[0]
+        data = kite.generate_session(request_token, api_secret=api_secret.strip())
         kite.set_access_token(data["access_token"])
-        print("✅ Step 3: Session established. Live data stream connected.")
+        print("✅ Step 3: Session established. Connected to live Kite feed.")
         return kite
-
-    except Exception as e:
-        print(f"❌ Kite Connect Exception: {e}")
-        return None
 
 
 # =====================================================================
