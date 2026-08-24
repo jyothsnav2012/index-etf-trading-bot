@@ -6,74 +6,36 @@
     <title>ETF Trading Engine Monitor</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; }
-        .container { max-width: 600px; margin: 0 auto; }
-        h2 { font-size: 20px; margin-bottom: 16px; color: #38bdf8; display: flex; align-items: center; justify-content: space-between; }
-        .badge { background: #10b981; color: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; }
+        .container { max-width: 650px; margin: 0 auto; }
+        h2 { font-size: 20px; margin-bottom: 16px; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; }
+        .badge { background: #10b981; color: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
         .card { background: #1e293b; border-radius: 12px; padding: 14px; border: 1px solid #334155; }
         .card-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
-        .card-val { font-size: 18px; font-weight: bold; margin-top: 6px; color: #f1f5f9; }
+        .card-val { font-size: 18px; font-weight: bold; margin-top: 6px; }
         .section-card { background: #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 16px; border: 1px solid #334155; }
-        .section-title { font-size: 15px; font-weight: bold; margin-bottom: 12px; color: #e2e8f0; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th, td { text-align: left; padding: 8px 4px; border-bottom: 1px solid #334155; }
-        th { color: #94a3b8; font-weight: 600; font-size: 11px; text-transform: uppercase; }
-        .footer { text-align: center; font-size: 11px; color: #64748b; margin-top: 20px; }
+        th, td { text-align: left; padding: 10px 4px; border-bottom: 1px solid #334155; }
+        th { color: #94a3b8; font-size: 11px; text-transform: uppercase; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>
-            <span>⚡ ETF Swing Engine</span>
-            <span class="badge">ONLINE</span>
-        </h2>
-
+        <h2><span>⚡ Multi-Agent ETF Engine</span><span class="badge">ONLINE</span></h2>
         <div class="grid">
-            <div class="card">
-                <div class="card-label">Last Polled</div>
-                <div class="card-val" style="font-size: 15px;">17:31 IST</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Active Slots</div>
-                <div class="card-val">0 / 3</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Capital Base</div>
-                <div class="card-val">₹1,00,000</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Tax Loss Shield</div>
-                <div class="card-val">₹0.00</div>
-            </div>
+            <div class="card"><div class="card-label">Last Polled</div><div class="card-val">18:09 IST</div></div>
+            <div class="card"><div class="card-label">Active Slots</div><div class="card-val">0 / 3</div></div>
+            <div class="card"><div class="card-label">Capital Base</div><div class="card-val">₹1,00,000</div></div>
+            <div class="card"><div class="card-label">Tax Shield</div><div class="card-val">₹0.00</div></div>
         </div>
-
         <div class="section-card">
-            <div class="section-title">Active Positions</div>
-            <table>
-                <thead>
-                    <tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Stop-Loss</th></tr>
-                </thead>
-                <tbody>
-                    <tr><td colspan="4" style="text-align:center; color:#64748b; padding:12px;">No active positions (100% Cash)</td></tr>
-                </tbody>
-            </table>
+            <div style="font-weight:bold; margin-bottom:10px; color:#e2e8f0;">Active Positions</div>
+            <table><thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Stop-Loss</th></tr></thead><tbody><tr><td colspan="4" style="text-align:center; color:#64748b; padding:12px;">No active positions (100% Cash)</td></tr></tbody></table>
         </div>
-
         <div class="section-card">
-            <div class="section-title">Recent Realized Trades</div>
-            <table>
-                <thead>
-                    <tr><th>Symbol</th><th>Exit Reason</th><th>Date</th></tr>
-                </thead>
-                <tbody>
-                    <tr><td colspan="3" style="text-align:center; color:#64748b; padding:12px;">No closed trades logged yet</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <div class="footer">
-            Automated Multi-Agent Engine • Cash Delivery (CNC)
+            <div style="font-weight:bold; margin-bottom:10px; color:#e2e8f0;">Recent Trades</div>
+            <table><thead><tr><th>Symbol</th><th>Exit Reason</th><th>Date</th></tr></thead><tbody><tr><td colspan="3" style="text-align:center; color:#64748b; padding:12px;">No closed trades logged yet</td></tr></tbody></table>
         </div>
     </div>
 </body>
