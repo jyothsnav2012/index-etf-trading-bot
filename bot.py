@@ -4,6 +4,7 @@ import requests
 import pyotp
 import pandas as pd
 import numpy as np
+import yfinance as yf
 from datetime import datetime, time, timedelta
 from kiteconnect import KiteConnect
 
@@ -26,14 +27,15 @@ HOLIDAYS_CACHE_FILE = "holidays_cache.json"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# YFinance Tickers for NSE Instruments
 WATCHLIST = {
-    "NIFTYBEES": {"token": 256265, "cluster": "BROAD_MARKET"},
-    "JUNIORBEES": {"token": 341249, "cluster": "BROAD_MARKET"},
-    "BANKBEES": {"token": 260105, "cluster": "BROAD_MARKET"},
-    "ITBEES": {"token": 408065, "cluster": "TECH_EXPORT"},
-    "AUTOBEES": {"token": 412673, "cluster": "AUTO_CYCLICAL"},
-    "PHARMABEES": {"token": 345601, "cluster": "HEALTHCARE_DEFENSIVE"},
-    "GOLDBEES": {"token": 367745, "cluster": "COMMODITY_HEDGE"}
+    "NIFTYBEES": {"ticker": "NIFTYBEES.NS", "cluster": "BROAD_MARKET"},
+    "JUNIORBEES": {"ticker": "JUNIORBEES.NS", "cluster": "BROAD_MARKET"},
+    "BANKBEES": {"ticker": "BANKBEES.NS", "cluster": "BROAD_MARKET"},
+    "ITBEES": {"ticker": "ITBEES.NS", "cluster": "TECH_EXPORT"},
+    "AUTOBEES": {"ticker": "AUTOBEES.NS", "cluster": "AUTO_CYCLICAL"},
+    "PHARMABEES": {"ticker": "PHARMABEES.NS", "cluster": "HEALTHCARE_DEFENSIVE"},
+    "GOLDBEES": {"ticker": "GOLDBEES.NS", "cluster": "COMMODITY_HEDGE"}
 }
 
 # =====================================================================
@@ -247,13 +249,11 @@ def get_kite_session():
         login_res = session.post(
             "https://kite.zerodha.com/api/login",
             data={"user_id": user_id.strip(), "password": password.strip()},
-            timeout=10,
+            timeout=10
         ).json()
 
         if login_res.get("status") != "success":
-            print(
-                f"❌ Step 1 (Login) Failed: {login_res.get('message', 'Check User ID / Password')}"
-            )
+            print(f"❌ Step 1 (Login) Failed: {login_res.get('message', 'Check User ID / Password')}")
             return None
         print("✅ Step 1: User ID and Password verified.")
 
@@ -262,19 +262,12 @@ def get_kite_session():
         # Step 2: TOTP 2FA
         twofa_res = session.post(
             "https://kite.zerodha.com/api/twofa",
-            data={
-                "user_id": user_id.strip(),
-                "request_id": request_id,
-                "twofa_value": totp,
-                "skip_session": "",
-            },
-            timeout=10,
+            data={"user_id": user_id.strip(), "request_id": request_id, "twofa_value": totp, "skip_session": ""},
+            timeout=10
         ).json()
 
         if twofa_res.get("status") != "success":
-            print(
-                f"❌ Step 2 (2FA) Failed: {twofa_res.get('message', 'Check KITE_TOTP_SECRET key')}"
-            )
+            print(f"❌ Step 2 (2FA) Failed: {twofa_res.get('message', 'Check KITE_TOTP_SECRET key')}")
             return None
         print("✅ Step 2: 2FA TOTP verified.")
 
@@ -285,38 +278,30 @@ def get_kite_session():
         try:
             resp = session.get(req_url, allow_redirects=True, timeout=10)
             if "request_token=" in resp.url:
-                request_token = resp.url.split("request_token=")[1].split("&")[
-                    0
-                ]
+                request_token = resp.url.split("request_token=")[1].split("&")[0]
         except requests.exceptions.ConnectionError as ce:
             url_str = str(ce)
             if "request_token=" in url_str:
-                request_token = (
-                    url_str.split("request_token=")[1].split("&")[0].split(" ")[0].rstrip("')\"")
-                )
+                request_token = url_str.split("request_token=")[1].split("&")[0].split(" ")[0].rstrip("')\"")
 
         if not request_token:
             print("❌ Step 3 Failed: Could not parse request_token.")
             return None
 
-        data = kite.generate_session(
-            request_token, api_secret=api_secret.strip()
-        )
+        data = kite.generate_session(request_token, api_secret=api_secret.strip())
         kite.set_access_token(data["access_token"])
-        print("✅ Step 3: Session established. Connected to live market data.")
+        print("✅ Step 3: Session established. Connected to Kite live feed.")
         return kite
 
     except Exception as e:
         print(f"❌ Kite Connect Exception: {e}")
         return None
 
-
 # =====================================================================
 # 6. MARKET TIMING & TAX ENGINE
 # =====================================================================
 def get_trading_holidays() -> set:
     cache = load_json(HOLIDAYS_CACHE_FILE, None)
-    today_str = datetime.now().strftime("%Y-%m-%d")
     current_year = datetime.now().year
 
     if cache and cache.get("year") == current_year:
@@ -343,18 +328,18 @@ def is_market_open():
     return True, "Market Active"
 
 # =====================================================================
-# 7. AGENT 1 & 2: DATA SENTINEL & REGIME SENTINEL
+# 7. AGENT 1 & 2: DATA SENTINEL & REGIME SENTINEL (VIA YFINANCE)
 # =====================================================================
-def fetch_indicators_and_regime(kite):
-    to_date = datetime.now().date()
-    from_date = to_date - timedelta(days=120)
+def fetch_indicators_and_regime():
     market_data = {}
 
     for sym, meta in WATCHLIST.items():
         try:
-            records = kite.historical_data(meta["token"], from_date, to_date, "day")
-            df = pd.DataFrame(records)
+            ticker_obj = yf.Ticker(meta["ticker"])
+            df = ticker_obj.history(period="6mo", interval="1d")
+            
             if not df.empty and len(df) >= 30:
+                df.columns = [c.lower() for c in df.columns]
                 df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
                 df["ema50"] = df["close"].ewm(span=50, adjust=False).mean()
                 
@@ -373,7 +358,7 @@ def fetch_indicators_and_regime(kite):
                 
                 market_data[sym] = df
         except Exception as e:
-            print(f"Error fetching historical data for {sym}: {e}")
+            print(f"Error fetching data for {sym}: {e}")
 
     regime = "NORMAL"
     nifty_df = market_data.get("NIFTYBEES")
@@ -381,12 +366,13 @@ def fetch_indicators_and_regime(kite):
         if nifty_df.iloc[-1]["close"] < nifty_df.iloc[-1]["ema50"]:
             regime = "DEFENSIVE"
     
+    print(f"Regime Sentinel: Market regime evaluated as '{regime}'")
     return market_data, regime
 
 # =====================================================================
 # 8. AGENT 3 & 4: ALPHA ENGINE & RISK MANAGER
 # =====================================================================
-def manage_positions_and_scan(kite, market_data, regime):
+def manage_positions_and_scan(market_data, regime):
     trades = load_json(DB_FILE, [])
     memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
     
@@ -411,7 +397,7 @@ def manage_positions_and_scan(kite, market_data, regime):
             half_qty = units // 2
             t["remaining_units"] = units - half_qty
             t["leg1_done"] = True
-            t["sl"] = entry_price # Move SL to Cost
+            t["sl"] = entry_price
             save_json(DB_FILE, trades)
             send_telegram(
                 f"🎯 *LEG 1 PROFIT BOOKED: {sym}*\n"
@@ -463,7 +449,7 @@ def manage_positions_and_scan(kite, market_data, regime):
                     inline_keyboard = {
                         "inline_keyboard": [
                             [
-                                {"text": f"✅ Buy {qty} units", "callback_data": f"BUY:{sym}:{close}:{qty}:{stop_loss}"},
+                                {"text": f"✅ Buy {qty} units", "callback_data": f"BUY:{sym}:{round(close,2)}:{qty}:{stop_loss}"},
                                 {"text": "❌ Pass", "callback_data": f"PASS:{sym}"}
                             ]
                         ]
@@ -485,11 +471,9 @@ def manage_positions_and_scan(kite, market_data, regime):
 # =====================================================================
 # 9. AGENT 5 & 6: TAX SHIELD & EXECUTION AGENT
 # =====================================================================
-def run_trading_engine(kite):
-    if not kite:
-        return
-    market_data, regime = fetch_indicators_and_regime(kite)
-    manage_positions_and_scan(kite, market_data, regime)
+def run_trading_engine():
+    market_data, regime = fetch_indicators_and_regime()
+    manage_positions_and_scan(market_data, regime)
 
 # =====================================================================
 # 10. MAIN CONTROLLER
@@ -501,7 +485,5 @@ if __name__ == "__main__":
     process_telegram_updates()
     kite = get_kite_session()
 
-    if kite:
-        run_trading_engine(kite)
-
+    run_trading_engine()
     generate_web_dashboard()
