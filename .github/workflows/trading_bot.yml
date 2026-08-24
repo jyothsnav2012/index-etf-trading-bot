@@ -1,50 +1,9 @@
-name: Automated Index Trading Bot
-
-on:
-  schedule:
-    # Runs every 15 minutes between 09:15 AM and 03:30 PM IST (03:45 to 10:00 UTC), Monday-Friday
-    - cron: '*/15 3-10 * * 1-5'
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install kiteconnect pandas pyotp requests
-
-      - name: Execute Multi-Agent Trading Engine
-        env:
-          KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
-          KITE_API_SECRET: ${{ secrets.KITE_API_SECRET }}
-          KITE_USER_ID: ${{ secrets.KITE_USER_ID }}
-          KITE_PASSWORD: ${{ secrets.KITE_PASSWORD }}
-          KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python bot.py
-
-      - name: Auto-Commit Trade Database, Memory and Dashboard
+- name: Auto-Commit Trade Database, Memory and Dashboard
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
+          git stash --include-untracked || true
+          git pull --rebase origin main || true
+          git stash pop || true
           git add -A docs/ *.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update state and web dashboard [skip ci]" && git push origin main)
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update state and dashboard [skip ci]" && git push origin main)
