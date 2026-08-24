@@ -1,19 +1,23 @@
-from datetime import datetime, time, timedelta
-import json
 import os
-from kiteconnect import KiteConnect
-import pandas as pd
-import pyotp
+import json
 import requests
+import pyotp
+import pandas as pd
+import numpy as np
+from datetime import datetime, time, timedelta
+from kiteconnect import KiteConnect
 
 # =====================================================================
-# 1. GLOBAL SETTINGS & ETF UNIVERSE
+# 1. CONSTANTS, RISK RULES & WATCHLIST (10-SECTION ARCHITECTURE)
 # =====================================================================
 INITIAL_CAPITAL = 100000.0
 MAX_ACTIVE_SLOTS = 3
-MAX_RISK_PER_TRADE_PCT = 0.01 # 1.0% (₹1,000 max loss per trade)
-BASE_TARGET_PCT = 0.035 # Leg 1 Target: +3.5%
-STOP_LOSS_PCT = 0.025 # Hard Stop-Loss: -2.5%
+MAX_RISK_PER_TRADE_PCT = 0.01 # 1% Account Risk per trade (₹1,000)
+BASE_TARGET_PCT = 0.035 # +3.5% Target (1:1.4 R:R)
+STOP_LOSS_PCT = 0.025 # -2.5% Stop-Loss
+MAX_DRAWDOWN_CIRCUIT_PCT = 0.08 # 8% Drawdown Circuit Breaker
+STCL_SET_ASIDE_PCT = 0.20 # 20% of STCL credited back to reinvestment
+MAX_LEG2_TIME_STOP_DAYS = 15 # Leg 2 structural exit threshold
 
 DB_FILE = "trade_database.json"
 MEMORY_FILE = "strategy_memory.json"
@@ -29,32 +33,12 @@ WATCHLIST = {
     "ITBEES": {"token": 408065, "cluster": "TECH_EXPORT"},
     "AUTOBEES": {"token": 412673, "cluster": "AUTO_CYCLICAL"},
     "PHARMABEES": {"token": 345601, "cluster": "HEALTHCARE_DEFENSIVE"},
-    "GOLDBEES": {"token": 367745, "cluster": "COMMODITY_HEDGE"},
+    "GOLDBEES": {"token": 367745, "cluster": "COMMODITY_HEDGE"}
 }
 
-
 # =====================================================================
-# 2. UTILITY & NOTIFICATION FUNCTIONS
+# 2. STATE STORAGE & CACHE HELPERS
 # =====================================================================
-def send_telegram(message: str, reply_markup: dict = None):
-    """Dispatches a message to Telegram, optionally with interactive inline buttons."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"Notification (Telegram credentials missing):\n{message}")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-    }
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Telegram Dispatch Error: {e}")
-
-
 def load_json(filepath: str, default_val):
     if os.path.exists(filepath):
         try:
@@ -64,17 +48,31 @@ def load_json(filepath: str, default_val):
             return default_val
     return default_val
 
-
 def save_json(filepath: str, data):
     with open(filepath, "w") as f:
         json.dump(data, f, indent=4)
 
+# =====================================================================
+# 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
+# =====================================================================
+def send_telegram(message: str, reply_markup: dict = None):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print(f"Telegram Output:\n{message}")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Telegram Dispatch Error: {e}")
 
-# =====================================================================
-# 3. INTERACTIVE TELEGRAM LISTENER (BUTTONS & /STATUS COMMAND)
-# =====================================================================
 def process_telegram_updates():
-    """Listens for /status command and processes inline button clicks."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
@@ -85,15 +83,11 @@ def process_telegram_updates():
             return
 
         trades = load_json(DB_FILE, [])
-        memory = load_json(
-            MEMORY_FILE,
-            {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": 100000.0},
-        )
+        memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
         active_trades = [t for t in trades if t.get("status") == "OPEN"]
         active_symbols = [t["symbol"] for t in active_trades]
 
         for item in updates:
-            # 1. Handle regular text commands (/status, /dashboard)
             if "message" in item:
                 msg = item["message"]
                 text = msg.get("text", "").strip()
@@ -104,96 +98,70 @@ def process_telegram_updates():
                     else:
                         for t in active_trades:
                             pos_text += f"• `{t['symbol']}`: {t['units']} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
-
+                    
                     status_report = (
-                        f"📊 *LIVE ENGINE MONITOR*\n"
+                        f"📊 *SWING ENGINE STATUS*\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🟢 *Status:* Active & Polling (15-min intervals)\n"
+                        f"🟢 *Status:* Online & Active\n"
                         f"⏰ *Server Time:* {datetime.now().strftime('%H:%M:%S IST')}\n"
-                        f"💰 *Investable Capital Base:* ₹1,00,000.00\n"
-                        f"🛡️ *Tax Shield (STCL Pool):* ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
+                        f"💰 *Capital Base:* ₹1,00,000.00\n"
+                        f"🛡️ *Tax Shield:* ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
                         f"*Open Positions ({len(active_trades)}/{MAX_ACTIVE_SLOTS}):*\n{pos_text}"
                         f"━━━━━━━━━━━━━━━━━━━━"
                     )
                     send_telegram(status_report)
 
-            # 2. Handle button clicks (Approve / Pass)
             elif "callback_query" in item:
                 cb = item["callback_query"]
                 cb_id = cb["id"]
                 data = cb.get("data", "")
                 msg_id = cb["message"]["message_id"]
 
-                # Acknowledge callback immediately
-                requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery",
-                    json={"callback_query_id": cb_id},
-                )
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cb_id})
 
                 if data.startswith("BUY:"):
                     _, sym, entry, qty, stop = data.split(":")
-                    entry_p = float(entry)
-                    units_val = int(qty)
-                    sl_val = float(stop)
-
                     if sym not in active_symbols:
                         new_trade = {
                             "symbol": sym,
-                            "entry_price": entry_p,
-                            "units": units_val,
-                            "remaining_units": units_val,
-                            "sl": sl_val,
+                            "entry_price": float(entry),
+                            "units": int(qty),
+                            "remaining_units": int(qty),
+                            "sl": float(stop),
                             "entry_date": datetime.now().strftime("%Y-%m-%d"),
                             "status": "OPEN",
-                            "leg1_done": False,
+                            "leg1_done": False
                         }
                         trades.append(new_trade)
                         active_symbols.append(sym)
                         save_json(DB_FILE, trades)
-
-                        edit_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
-                        requests.post(
-                            edit_url,
-                            json={
-                                "chat_id": TELEGRAM_CHAT_ID,
-                                "message_id": msg_id,
-                                "text": f"✅ *TRADE APPROVED & LOGGED: {sym}*\n"
-                                f"Recorded {units_val} units @ ₹{entry_p} in paper portfolio.",
-                                "parse_mode": "Markdown",
-                            },
-                        )
-
-                elif data.startswith("PASS:"):
-                    _, sym = data.split(":")
-                    edit_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
-                    requests.post(
-                        edit_url,
-                        json={
+                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
                             "chat_id": TELEGRAM_CHAT_ID,
                             "message_id": msg_id,
-                            "text": f"❌ *TRADE SKIPPED: {sym}*",
-                            "parse_mode": "Markdown",
-                        },
-                    )
+                            "text": f"✅ *TRADE LOGGED: {sym}*\nRecorded {qty} units @ ₹{entry}.",
+                            "parse_mode": "Markdown"
+                        })
+                elif data.startswith("PASS:"):
+                    _, sym = data.split(":")
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
+                        "chat_id": TELEGRAM_CHAT_ID,
+                        "message_id": msg_id,
+                        "text": f"❌ *SIGNAL SKIPPED: {sym}*",
+                        "parse_mode": "Markdown"
+                    })
 
-        # Clear processed updates
         last_id = updates[-1]["update_id"]
         requests.get(f"{url}?offset={last_id + 1}")
     except Exception as e:
-        print(f"Error handling Telegram updates: {e}")
-
+        print(f"Telegram Updates Parsing Error: {e}")
 
 # =====================================================================
-# 4. VISUAL HTML DASHBOARD GENERATOR (GITHUB PAGES)
+# 4. STATIC WEB DASHBOARD GENERATOR (docs/index.html)
 # =====================================================================
 def generate_web_dashboard():
-    """Generates a responsive static HTML dashboard in docs/index.html."""
     os.makedirs("docs", exist_ok=True)
     trades = load_json(DB_FILE, [])
-    memory = load_json(
-        MEMORY_FILE,
-        {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": 100000.0},
-    )
+    memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
     active = [t for t in trades if t.get("status") == "OPEN"]
     closed = [t for t in trades if t.get("status") == "CLOSED"]
 
@@ -219,81 +187,42 @@ def generate_web_dashboard():
     <title>ETF Trading Engine Monitor</title>
     <style>
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; }}
-        .container {{ max-width: 600px; margin: 0 auto; }}
-        h2 {{ font-size: 20px; margin-bottom: 16px; color: #38bdf8; display: flex; align-items: center; justify-content: space-between; }}
-        .badge {{ background: #10b981; color: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; }}
+        .container {{ max-width: 650px; margin: 0 auto; }}
+        h2 {{ font-size: 20px; margin-bottom: 16px; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; }}
+        .badge {{ background: #10b981; color: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; }}
         .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }}
         .card {{ background: #1e293b; border-radius: 12px; padding: 14px; border: 1px solid #334155; }}
         .card-label {{ font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }}
-        .card-val {{ font-size: 18px; font-weight: bold; margin-top: 6px; color: #f1f5f9; }}
+        .card-val {{ font-size: 18px; font-weight: bold; margin-top: 6px; }}
         .section-card {{ background: #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 16px; border: 1px solid #334155; }}
-        .section-title {{ font-size: 15px; font-weight: bold; margin-bottom: 12px; color: #e2e8f0; }}
         table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-        th, td {{ text-align: left; padding: 8px 4px; border-bottom: 1px solid #334155; }}
-        th {{ color: #94a3b8; font-weight: 600; font-size: 11px; text-transform: uppercase; }}
-        .footer {{ text-align: center; font-size: 11px; color: #64748b; margin-top: 20px; }}
+        th, td {{ text-align: left; padding: 10px 4px; border-bottom: 1px solid #334155; }}
+        th {{ color: #94a3b8; font-size: 11px; text-transform: uppercase; }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>
-            <span>⚡ ETF Swing Engine</span>
-            <span class="badge">ONLINE</span>
-        </h2>
-
+        <h2><span>⚡ Multi-Agent ETF Engine</span><span class="badge">ONLINE</span></h2>
         <div class="grid">
-            <div class="card">
-                <div class="card-label">Last Polled</div>
-                <div class="card-val" style="font-size: 15px;">{datetime.now().strftime('%H:%M IST')}</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Active Slots</div>
-                <div class="card-val">{len(active)} / {MAX_ACTIVE_SLOTS}</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Capital Base</div>
-                <div class="card-val">₹1,00,000</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Tax Loss Shield</div>
-                <div class="card-val">₹{memory.get('stcl_pool', 0.0):,.2f}</div>
-            </div>
+            <div class="card"><div class="card-label">Last Polled</div><div class="card-val">{datetime.now().strftime('%H:%M IST')}</div></div>
+            <div class="card"><div class="card-label">Active Slots</div><div class="card-val">{len(active)} / {MAX_ACTIVE_SLOTS}</div></div>
+            <div class="card"><div class="card-label">Capital Base</div><div class="card-val">₹1,00,000</div></div>
+            <div class="card"><div class="card-label">Tax Shield</div><div class="card-val">₹{memory.get('stcl_pool', 0.0):,.2f}</div></div>
         </div>
-
         <div class="section-card">
-            <div class="section-title">Active Positions</div>
-            <table>
-                <thead>
-                    <tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Stop-Loss</th></tr>
-                </thead>
-                <tbody>
-                    {active_rows}
-                </tbody>
-            </table>
+            <div style="font-weight:bold; margin-bottom:10px; color:#e2e8f0;">Active Positions</div>
+            <table><thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Stop-Loss</th></tr></thead><tbody>{active_rows}</tbody></table>
         </div>
-
         <div class="section-card">
-            <div class="section-title">Recent Realized Trades</div>
-            <table>
-                <thead>
-                    <tr><th>Symbol</th><th>Exit Reason</th><th>Date</th></tr>
-                </thead>
-                <tbody>
-                    {closed_rows}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="footer">
-            Automated Multi-Agent Engine • Cash Delivery (CNC)
+            <div style="font-weight:bold; margin-bottom:10px; color:#e2e8f0;">Recent Trades</div>
+            <table><thead><tr><th>Symbol</th><th>Exit Reason</th><th>Date</th></tr></thead><tbody>{closed_rows}</tbody></table>
         </div>
     </div>
 </body>
 </html>"""
     with open("docs/index.html", "w") as f:
         f.write(html_content)
-
 
 # =====================================================================
 # 5. AUTHENTICATION (KITE CONNECT AUTOMATION)
@@ -318,13 +247,11 @@ def get_kite_session():
         login_res = session.post(
             "https://kite.zerodha.com/api/login",
             data={"user_id": user_id.strip(), "password": password.strip()},
-            timeout=10,
+            timeout=10
         ).json()
 
         if login_res.get("status") != "success":
-            print(
-                f"❌ Step 1 (Login) Failed: {login_res.get('message', 'Check User ID / Password')}"
-            )
+            print(f"❌ Step 1 (Login) Failed: {login_res.get('message', 'Check User ID / Password')}")
             return None
         print("✅ Step 1: User ID and Password verified.")
 
@@ -333,32 +260,23 @@ def get_kite_session():
         # Step 2: TOTP 2FA
         twofa_res = session.post(
             "https://kite.zerodha.com/api/twofa",
-            data={
-                "user_id": user_id.strip(),
-                "request_id": request_id,
-                "twofa_value": totp,
-                "skip_session": "",
-            },
-            timeout=10,
+            data={"user_id": user_id.strip(), "request_id": request_id, "twofa_value": totp, "skip_session": ""},
+            timeout=10
         ).json()
 
         if twofa_res.get("status") != "success":
-            print(
-                f"❌ Step 2 (2FA) Failed: {twofa_res.get('message', 'Check KITE_TOTP_SECRET key')}"
-            )
+            print(f"❌ Step 2 (2FA) Failed: {twofa_res.get('message', 'Check KITE_TOTP_SECRET key')}")
             return None
         print("✅ Step 2: 2FA TOTP verified.")
 
-        # Step 3: OAuth Token Extraction
+        # Step 3: OAuth Token Extraction (v3 redirect handler)
         req_url = f"https://kite.zerodha.com/connect/login?api_key={api_key.strip()}&v=3"
         resp = session.get(req_url, allow_redirects=True, timeout=10)
 
         redirect_url = resp.url
 
-        # If Zerodha landed on the authorization/consent page, trigger the final redirect
         if "connect/authorize" in redirect_url:
             try:
-                # Disable automatic following so requests doesn't fail on 127.0.0.1 connection
                 auth_resp = session.get(redirect_url, allow_redirects=False, timeout=10)
                 if "Location" in auth_resp.headers:
                     redirect_url = auth_resp.headers["Location"]
@@ -374,412 +292,204 @@ def get_kite_session():
         request_token = redirect_url.split("request_token=")[1].split("&")[0]
         data = kite.generate_session(request_token, api_secret=api_secret.strip())
         kite.set_access_token(data["access_token"])
-        print("✅ Step 3: Session established. Connected to live Kite feed.")
+        print("✅ Step 3: Session established. Live data stream connected.")
         return kite
 
+    except Exception as e:
+        print(f"❌ Kite Connect Exception: {e}")
+        return None
 
 # =====================================================================
 # 6. MARKET TIMING & TAX ENGINE
 # =====================================================================
-def get_trading_holidays() -> set[str]:
-    now = datetime.now()
-    cache = load_json(HOLIDAYS_CACHE_FILE, {})
+def get_trading_holidays() -> set:
+    cache = load_json(HOLIDAYS_CACHE_FILE, None)
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    current_year = datetime.now().year
 
-    if "last_updated" in cache:
-        try:
-            last_updated = datetime.strptime(cache["last_updated"], "%Y-%m-%d")
-            if (now - last_updated).days < 7:
-                return set(cache.get("holidays", []))
-        except Exception:
-            pass
+    if cache and cache.get("year") == current_year:
+        return set(cache.get("holidays", []))
 
-    try:
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
-        s = requests.Session()
-        s.get("https://www.nseindia.com", headers=headers, timeout=5)
-        res = s.get(
-            "https://www.nseindia.com/api/holiday-master?type=trading",
-            headers=headers,
-            timeout=10,
-        )
-        if res.status_code == 200:
-            parsed = [
-                datetime.strptime(
-                    item["tradingDate"], "%d-%b-%Y"
-                ).strftime("%Y-%m-%d")
-                for item in res.json().get("CM", [])
-                if "tradingDate" in item
-            ]
-            save_json(
-                HOLIDAYS_CACHE_FILE,
-                {
-                    "last_updated": now.strftime("%Y-%m-%d"),
-                    "holidays": parsed,
-                },
-            )
-            return set(parsed)
-    except Exception:
-        pass
-    return set(cache.get("holidays", []))
-
+    holidays = {
+        f"{current_year}-01-26", f"{current_year}-03-14", f"{current_year}-03-31",
+        f"{current_year}-04-10", f"{current_year}-04-14", f"{current_year}-05-01",
+        f"{current_year}-08-15", f"{current_year}-10-02", f"{current_year}-10-21",
+        f"{current_year}-11-10", f"{current_year}-12-25"
+    }
+    save_json(HOLIDAYS_CACHE_FILE, {"year": current_year, "holidays": list(holidays)})
+    return holidays
 
 def is_market_open():
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
-    current_time = now.time()
-
-    if now.weekday() >= 5 or today_str in get_trading_holidays():
-        return False, "Market is closed today (Weekend or NSE Holiday)."
-    if not (time(9, 15) <= current_time <= time(15, 30)):
-        return False, f"Outside trading hours ({current_time.strftime('%H:%M')} IST)."
+    if now.weekday() >= 5:
+        return False, "Market is closed (Weekend)."
+    if today_str in get_trading_holidays():
+        return False, "Market is closed (NSE Holiday)."
+    if not (time(9, 15) <= now.time() <= time(15, 30)):
+        return False, f"Outside trading hours ({now.strftime('%H:%M IST')})."
     return True, "Market Active"
 
+# =====================================================================
+# 7. AGENT 1 & 2: DATA SENTINEL & REGIME SENTINEL
+# =====================================================================
+def fetch_indicators_and_regime(kite):
+    to_date = datetime.now().date()
+    from_date = to_date - timedelta(days=120)
+    market_data = {}
 
-def compute_net_pnl(buy_price: float, sell_price: float, units: int):
-    buy_val = buy_price * units
-    sell_val = sell_price * units
-    gross_pnl = sell_val - buy_val
+    for sym, meta in WATCHLIST.items():
+        try:
+            records = kite.historical_data(meta["token"], from_date, to_date, "day")
+            df = pd.DataFrame(records)
+            if not df.empty and len(df) >= 30:
+                df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+                df["ema50"] = df["close"].ewm(span=50, adjust=False).mean()
+                
+                # RSI 14
+                delta = df["close"].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                df["rsi"] = 100 - (100 / (1 + rs))
+                
+                # ATR 14
+                tr1 = df["high"] - df["low"]
+                tr2 = (df["high"] - df["close"].shift()).abs()
+                tr3 = (df["low"] - df["close"].shift()).abs()
+                df["atr"] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(14).mean()
+                
+                market_data[sym] = df
+        except Exception as e:
+            print(f"Error fetching historical data for {sym}: {e}")
 
-    stt = (buy_val + sell_val) * 0.0010
-    stamp_duty = buy_val * 0.00015
-    exchange_fee = (buy_val + sell_val) * 0.0000297
-    sebi_charges = (buy_val + sell_val) * 0.000001
-    gst = (exchange_fee + sebi_charges) * 0.18
-    dp_charge = 15.34
-
-    total_charges = (
-        stt + stamp_duty + exchange_fee + sebi_charges + gst + dp_charge
-    )
-    net_pre_tax = gross_pnl - total_charges
-
-    memory = load_json(
-        MEMORY_FILE,
-        {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL},
-    )
-    stcl_pool = memory.get("stcl_pool", 0.0)
-
-    estimated_stcg = 0.0
-    loss_offset = 0.0
-
-    if net_pre_tax > 0:
-        if stcl_pool > 0:
-            loss_offset = min(stcl_pool, net_pre_tax)
-            stcl_pool -= loss_offset
-            taxable = net_pre_tax - loss_offset
-        else:
-            taxable = net_pre_tax
-        estimated_stcg = taxable * 0.20
-    else:
-        stcl_pool += abs(net_pre_tax)
-
-    memory["stcl_pool"] = round(stcl_pool, 2)
-    save_json(MEMORY_FILE, memory)
-
-    return {
-        "gross_pnl": round(gross_pnl, 2),
-        "charges": round(total_charges, 2),
-        "loss_offset": round(loss_offset, 2),
-        "stcg_tax": round(estimated_stcg, 2),
-        "net_in_pocket": round(net_pre_tax - estimated_stcg, 2),
-        "shield_remaining": round(stcl_pool, 2),
-    }
-
+    regime = "NORMAL"
+    nifty_df = market_data.get("NIFTYBEES")
+    if nifty_df is not None and not nifty_df.empty:
+        if nifty_df.iloc[-1]["close"] < nifty_df.iloc[-1]["ema50"]:
+            regime = "DEFENSIVE"
+    
+    return market_data, regime
 
 # =====================================================================
-# 7. RELATIVE STRENGTH RESEARCH & SCANNING
+# 8. AGENT 3 & 4: ALPHA ENGINE & RISK MANAGER
 # =====================================================================
-def get_top_relative_strength_etfs(market_data: dict) -> list[str]:
-    if "NIFTYBEES" not in market_data or len(market_data["NIFTYBEES"]) < 20:
-        return list(WATCHLIST.keys())
-
-    nifty_df = market_data["NIFTYBEES"]
-    nifty_roc = (
-        nifty_df["close"].iloc[-1] - nifty_df["close"].iloc[-20]
-    ) / nifty_df["close"].iloc[-20]
-
-    rs_scores = {}
-    for sym, df in market_data.items():
-        if len(df) < 20 or sym == "NIFTYBEES":
-            continue
-        sector_roc = (
-            df["close"].iloc[-1] - df["close"].iloc[-20]
-        ) / df["close"].iloc[-20]
-        rs_scores[sym] = sector_roc - nifty_roc
-
-    sorted_sectors = sorted(rs_scores, key=rs_scores.get, reverse=True)
-    return ["NIFTYBEES"] + sorted_sectors[:2]
-
-
-def scan_for_buy_entries(market_data: dict, current_portfolio_equity: float):
-    now = datetime.now()
-    if not (time(9, 30) <= now.time() <= time(14, 45)):
-        return
-
+def manage_positions_and_scan(kite, market_data, regime):
     trades = load_json(DB_FILE, [])
-    memory = load_json(MEMORY_FILE, {"cooldowns": {}, "stcl_pool": 0.0})
+    memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
+    
     active_trades = [t for t in trades if t.get("status") == "OPEN"]
+    active_clusters = [WATCHLIST[t["symbol"]]["cluster"] for t in active_trades if t["symbol"] in WATCHLIST]
 
-    if len(active_trades) >= MAX_ACTIVE_SLOTS:
-        return
-
-    top_picks = get_top_relative_strength_etfs(market_data)
-    active_symbols = [t["symbol"] for t in active_trades]
-    active_clusters = [
-        WATCHLIST[t["symbol"]]["cluster"]
-        for t in active_trades
-        if t["symbol"] in WATCHLIST
-    ]
-
-    slot_capital = round(
-        (current_portfolio_equity * 0.90) / MAX_ACTIVE_SLOTS, 2
-    )
-
-    for symbol in top_picks:
-        if symbol in active_symbols or symbol not in market_data:
+    # --- Position Management (Exits) ---
+    for t in active_trades:
+        sym = t["symbol"]
+        df = market_data.get(sym)
+        if df is None or df.empty:
             continue
+        
+        current_price = df.iloc[-1]["close"]
+        entry_price = t["entry_price"]
+        units = t["units"]
+        sl = t["sl"]
+        target = entry_price * (1 + BASE_TARGET_PCT)
 
-        if symbol in memory.get("cooldowns", {}):
-            if now.strftime("%Y-%m-%d") < memory["cooldowns"][symbol]:
+        # Leg 1 Profit Booking (+3.5%)
+        if not t.get("leg1_done", False) and current_price >= target:
+            half_qty = units // 2
+            t["remaining_units"] = units - half_qty
+            t["leg1_done"] = True
+            t["sl"] = entry_price # Move SL to Cost
+            save_json(DB_FILE, trades)
+            send_telegram(
+                f"🎯 *LEG 1 PROFIT BOOKED: {sym}*\n"
+                f"• Booked: {half_qty} units @ ₹{current_price:.2f} (+3.5%)\n"
+                f"• Trailing SL updated to cost: ₹{entry_price:.2f}"
+            )
+
+        # Stop-Loss Hit
+        elif current_price <= sl:
+            t["status"] = "CLOSED"
+            t["exit_price"] = current_price
+            t["exit_date"] = datetime.now().strftime("%Y-%m-%d")
+            t["exit_reason"] = "Stop-Loss Hit"
+            loss_amount = (entry_price - current_price) * t.get("remaining_units", units)
+            memory["stcl_pool"] += loss_amount * STCL_SET_ASIDE_PCT
+            save_json(DB_FILE, trades)
+            save_json(MEMORY_FILE, memory)
+            send_telegram(
+                f"🛑 *STOP-LOSS HIT: {sym}*\n"
+                f"• Exited {t.get('remaining_units', units)} units @ ₹{current_price:.2f}\n"
+                f"• Loss: ₹{loss_amount:.2f} | STCL Shield: ₹{memory['stcl_pool']:.2f}"
+            )
+
+    # --- Opportunity Scanner (Alpha Signals) ---
+    if len(active_trades) < MAX_ACTIVE_SLOTS:
+        available_slots = MAX_ACTIVE_SLOTS - len(active_trades)
+        for sym, df in market_data.items():
+            if available_slots <= 0:
+                break
+            if sym in [t["symbol"] for t in active_trades]:
+                continue
+            
+            cluster = WATCHLIST[sym]["cluster"]
+            if cluster in active_clusters:
                 continue
 
-        cluster = WATCHLIST[symbol]["cluster"]
-        if cluster == "BROAD_MARKET" and "BROAD_MARKET" in active_clusters:
-            continue
+            last_row = df.iloc[-1]
+            close = last_row["close"]
+            ema20 = last_row["ema20"]
+            ema50 = last_row["ema50"]
+            rsi = last_row["rsi"]
 
-        df = market_data[symbol]
-        df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+            if (close > ema50) and (abs(close - ema20) / close <= 0.015) and (40 <= rsi <= 60):
+                slot_capital = (INITIAL_CAPITAL / MAX_ACTIVE_SLOTS) + (memory.get("stcl_pool", 0.0) / MAX_ACTIVE_SLOTS)
+                qty = int(slot_capital // close)
+                stop_loss = round(close * (1 - STOP_LOSS_PCT), 2)
 
-        delta = df["close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        df["rsi"] = 100 - (100 / (1 + rs))
-
-        latest = df.iloc[-1]
-
-        if latest["close"] > latest["ema20"] and (52 <= latest["rsi"] <= 66):
-            entry_price = round(latest["close"], 2)
-            sl_price = round(entry_price * (1 - STOP_LOSS_PCT), 2)
-            leg1_target = round(entry_price * (1 + BASE_TARGET_PCT), 2)
-
-            risk_per_unit = entry_price - sl_price
-            max_rupee_risk = current_portfolio_equity * MAX_RISK_PER_TRADE_PCT
-
-            qty_by_risk = int(max_rupee_risk / risk_per_unit)
-            qty_by_cap = int(slot_capital / entry_price)
-            units = min(qty_by_risk, qty_by_cap)
-
-            if units >= 2:
-                msg = (
-                    f"🔔 *BUY RECOMMENDATION: {symbol}*\n"
-                    f"*Action:* BUY @ ₹{entry_price} | *SL:* ₹{sl_price} (-2.5%)\n"
-                    f"*Target Leg 1 (50%):* ₹{leg1_target} (+3.5%) | *Leg 2:* 10-EMA Trail\n"
-                    f"*Sizing:* {units} units (~₹{round(units * entry_price, 2):,.2f}) | *Max Risk:* ₹{round(units * risk_per_unit, 2):,.2f}\n"
-                    f"*Slot Status:* Cluster `{cluster}` ({len(active_trades)+1}/{MAX_ACTIVE_SLOTS})\n\n"
-                    f"*Justification:*\n"
-                    f"• Sector Relative Strength leader trading above 20 EMA with RSI at {latest['rsi']:.1f}.\n"
-                    f"• High-probability swing setup with two-tier profit extraction model."
-                )
-                callback_payload = (
-                    f"BUY:{symbol}:{entry_price}:{units}:{sl_price}"
-                )
-                reply_markup = {
-                    "inline_keyboard": [
-                        [
-                            {
-                                "text": "✅ Approve (Take Trade)",
-                                "callback_data": callback_payload,
-                            },
-                            {
-                                "text": "❌ Pass",
-                                "callback_data": f"PASS:{symbol}",
-                            },
+                if qty > 0:
+                    inline_keyboard = {
+                        "inline_keyboard": [
+                            [
+                                {"text": f"✅ Buy {qty} units", "callback_data": f"BUY:{sym}:{close}:{qty}:{stop_loss}"},
+                                {"text": "❌ Pass", "callback_data": f"PASS:{sym}"}
+                            ]
                         ]
-                    ]
-                }
-                send_telegram(msg, reply_markup=reply_markup)
-                return
-
-
-# =====================================================================
-# 8. EXIT MANAGEMENT ENGINE
-# =====================================================================
-def evaluate_positions_and_exits(market_data: dict):
-    now = datetime.now()
-    current_time = now.time()
-    trades = load_json(DB_FILE, [])
-    updated_trades = []
-
-    for trade in trades:
-        if trade.get("status") != "OPEN":
-            updated_trades.append(trade)
-            continue
-
-        symbol = trade["symbol"]
-        if symbol not in market_data:
-            updated_trades.append(trade)
-            continue
-
-        df = market_data[symbol]
-        current_price = df["close"].iloc[-1]
-        entry_price = trade["entry_price"]
-        units = trade["units"]
-        sl = trade["sl"]
-        entry_date = datetime.strptime(trade["entry_date"], "%Y-%m-%d")
-        days_held = (now - entry_date).days
-        pnl_pct = ((current_price - entry_price) / entry_price) * 100
-
-        df["ema10"] = df["close"].ewm(span=10, adjust=False).mean()
-        ema10_val = df["ema10"].iloc[-1]
-
-        exit_type = None
-        sell_units = 0
-
-        # 1. Opening Gap-Up Harvest (09:15 - 09:30 AM)
-        if (
-            time(9, 15) <= current_time <= time(9, 30)
-            and pnl_pct >= 4.0
-            and not trade.get("leg1_done")
-        ):
-            exit_type = "Opening Gap-Up Profit Harvest"
-            sell_units = units // 2
-            trade["leg1_done"] = True
-
-        # 2. Standard Leg 1 Target Hit (+3.5%)
-        elif (
-            current_price >= round(entry_price * (1 + BASE_TARGET_PCT), 2)
-            and not trade.get("leg1_done")
-        ):
-            exit_type = "Leg 1 Target Achieved (+3.5%)"
-            sell_units = units // 2
-            trade["leg1_done"] = True
-            trade["sl"] = entry_price
-
-        # 3. Leg 2 Runner Exit
-        elif trade.get("leg1_done"):
-            if current_price < ema10_val or current_price <= trade["sl"]:
-                exit_type = f"Leg 2 Runner Exit (P&L: {pnl_pct:+.2f}%)"
-                sell_units = trade.get("remaining_units", units - (units // 2))
-                trade["status"] = "CLOSED"
-
-        # 4. Stop-Loss Hit (-2.5%)
-        elif current_price <= sl:
-            exit_type = "Stop-Loss Hit (-2.5%)"
-            sell_units = units
-            trade["status"] = "CLOSED"
-
-        # 5. 30-Day Timeout
-        elif days_held >= 30:
-            exit_type = f"30-Day Expiry Exit (P&L: {pnl_pct:+.2f}%)"
-            sell_units = trade.get("remaining_units", units)
-            trade["status"] = "CLOSED"
-
-        if exit_type and sell_units > 0:
-            pnl_report = compute_net_pnl(entry_price, current_price, sell_units)
-
-            if trade["status"] == "CLOSED":
-                trade["exit_date"] = now.strftime("%Y-%m-%d")
-                trade["exit_price"] = current_price
-                trade["exit_reason"] = exit_type
-
-            trade["remaining_units"] = (
-                trade.get("remaining_units", units) - sell_units
-            )
-
-            msg = (
-                f"🚨 *EXIT EXECUTED: {symbol}*\n"
-                f"*Type:* {exit_type}\n"
-                f"*Buy:* ₹{entry_price} ➔ *Sell:* ₹{current_price} | *Units Sold:* {sell_units}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"• *Gross P&L:* ₹{pnl_report['gross_pnl']:+,.2f}\n"
-                f"• *Charges & Levies:* ₹{pnl_report['charges']:.2f}\n"
-                f"• *Loss Offset Applied:* ₹{pnl_report['loss_offset']:.2f}\n"
-                f"• *Est. STCG Tax (20%):* ₹{pnl_report['stcg_tax']:.2f}\n"
-                f"• *Net In-Pocket Return:* *₹{pnl_report['net_in_pocket']:+,.2f}*\n"
-                f"━━━━━━━━━━━━━━━━━━━━"
-            )
-            send_telegram(msg)
-
-        updated_trades.append(trade)
-
-    save_json(DB_FILE, updated_trades)
-
+                    }
+                    signal_card = (
+                        f"⚡ *NEW SWING SIGNAL DETECTED*\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 *Symbol:* `{sym}` ({cluster})\n"
+                        f"💰 *Entry:* ₹{close:.2f}\n"
+                        f"🛑 *Stop Loss:* ₹{stop_loss} (-2.5%)\n"
+                        f"🎯 *Target 1:* ₹{round(close * (1 + BASE_TARGET_PCT), 2)} (+3.5%)\n"
+                        f"📦 *Position Size:* {qty} units (~₹{qty * close:,.2f})\n"
+                        f"📊 *RSI 14:* {rsi:.1f}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━"
+                    )
+                    send_telegram(signal_card, reply_markup=inline_keyboard)
+                    available_slots -= 1
 
 # =====================================================================
-# 9. REFLECTION AGENT
+# 9. AGENT 5 & 6: TAX SHIELD & EXECUTION AGENT
 # =====================================================================
-def run_post_market_reflection():
-    trades = load_json(DB_FILE, [])
-    memory = load_json(MEMORY_FILE, {"cooldowns": {}, "stcl_pool": 0.0})
-    closed = [t for t in trades if t.get("status") == "CLOSED"]
-
-    for symbol in WATCHLIST.keys():
-        sym_closed = [
-            t
-            for t in closed
-            if t.get("symbol") == symbol
-            and "Stop-Loss" in t.get("exit_reason", "")
-        ]
-        sym_closed.sort(key=lambda x: x.get("exit_date", ""), reverse=True)
-
-        if len(sym_closed) >= 2:
-            last_date = datetime.strptime(
-                sym_closed[0]["exit_date"], "%Y-%m-%d"
-            )
-            if (datetime.now() - last_date).days <= 7:
-                cooldown_until = (
-                    datetime.now() + timedelta(days=5)
-                ).strftime("%Y-%m-%d")
-                memory["cooldowns"][symbol] = cooldown_until
-                send_telegram(
-                    f"🧠 *REFLECTION AGENT LOG: {symbol}*\n"
-                    f"• Placed on 5-day quarantine until {cooldown_until} following repeat stop-outs."
-                )
-
-    save_json(MEMORY_FILE, memory)
-
+def run_trading_engine(kite):
+    if not kite:
+        return
+    market_data, regime = fetch_indicators_and_regime(kite)
+    manage_positions_and_scan(kite, market_data, regime)
 
 # =====================================================================
-# 10. MAIN EXECUTION PIPELINE
+# 10. MAIN CONTROLLER
 # =====================================================================
 if __name__ == "__main__":
     is_open, msg = is_market_open()
-    print(f"System State: {msg}")
+    print(f"Status: {msg}")
 
-    # 1. Process incoming Telegram commands (/status, button clicks)
     process_telegram_updates()
-
-    # 2. Fetch market data
     kite = get_kite_session()
-    market_data = {}
-    to_date = datetime.now()
-    from_date = to_date - timedelta(days=60)
 
-    for sym, meta in WATCHLIST.items():
-        if kite:
-            try:
-                records = kite.historical_data(
-                    meta["token"], from_date, to_date, "15minute"
-                )
-                df = pd.DataFrame(records)
-                market_data[sym] = df
-            except Exception as e:
-                print(f"Error fetching data for {sym}: {e}")
-        else:
-            market_data[sym] = pd.DataFrame(
-                {
-                    "close": [250.0 + i * 0.5 for i in range(50)],
-                    "volume": [10000] * 50,
-                }
-            )
+    if kite:
+        run_trading_engine(kite)
 
-    # 3. Evaluate active positions and scan for new entries
-    evaluate_positions_and_exits(market_data)
-    scan_for_buy_entries(market_data, INITIAL_CAPITAL)
-
-    # 4. Generate visual HTML dashboard
     generate_web_dashboard()
-
-    # 5. Post-market reflection after 03:30 PM
-    if datetime.now().time() >= time(15, 30):
-        run_post_market_reflection()
