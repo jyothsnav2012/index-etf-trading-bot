@@ -70,6 +70,7 @@ def save_json(filepath: str, data):
 # =====================================================================
 # 3. AUTHENTICATION (AUTOMATED TOTP)
 # =====================================================================
+
 def get_kite_session():
     api_key = os.getenv("KITE_API_KEY")
     api_secret = os.getenv("KITE_API_SECRET")
@@ -78,24 +79,35 @@ def get_kite_session():
     totp_secret = os.getenv("KITE_TOTP_SECRET")
 
     if not all([api_key, api_secret, user_id, password, totp_secret]):
+        print("❌ Kite Connect Error: Missing GitHub Secrets.")
         return None
 
     try:
-        kite = KiteConnect(api_key=api_key)
-        totp = pyotp.TOTP(totp_secret).now()
+        kite = KiteConnect(api_key=api_key.strip())
+        totp = pyotp.TOTP(totp_secret.strip()).now()
         session = requests.Session()
 
+        # Step 1: User ID + Password
         login_res = session.post(
             "https://kite.zerodha.com/api/login",
-            data={"user_id": user_id, "password": password},
+            data={"user_id": user_id.strip(), "password": password.strip()},
             timeout=10,
         ).json()
+
+        if login_res.get("status") != "success":
+            print(
+                f"❌ Step 1 (Login) Failed: {login_res.get('message', 'Check User ID / Password')}"
+            )
+            return None
+        print("✅ Step 1: User ID and Password verified.")
+
         request_id = login_res["data"]["request_id"]
 
+        # Step 2: TOTP 2FA
         twofa_res = session.post(
             "https://kite.zerodha.com/api/twofa",
             data={
-                "user_id": user_id,
+                "user_id": user_id.strip(),
                 "request_id": request_id,
                 "twofa_value": totp,
                 "skip_session": "",
@@ -103,16 +115,33 @@ def get_kite_session():
             timeout=10,
         ).json()
 
-        req_url = f"https://kite.zerodha.com/connect/login?api_key={api_key}&skip_session=true"
-        resp = session.get(req_url, timeout=10)
-        request_token = resp.url.split("request_token=")[1].split("&")[0]
+        if twofa_res.get("status") != "success":
+            print(
+                f"❌ Step 2 (2FA) Failed: {twofa_res.get('message', 'Check KITE_TOTP_SECRET key')}"
+            )
+            return None
+        print("✅ Step 2: 2FA TOTP verified.")
 
-        data = kite.generate_session(request_token, api_secret=api_secret)
+        # Step 3: OAuth Token Extraction
+        req_url = f"https://kite.zerodha.com/connect/login?api_key={api_key.strip()}&skip_session=true"
+        resp = session.get(req_url, timeout=10)
+
+        if "request_token=" not in resp.url:
+            print(f"❌ Step 3 Failed: Redirect URL was {resp.url}")
+            return None
+
+        request_token = resp.url.split("request_token=")[1].split("&")[0]
+        data = kite.generate_session(
+            request_token, api_secret=api_secret.strip()
+        )
         kite.set_access_token(data["access_token"])
+        print("✅ Step 3: Session established. Live data stream connected.")
         return kite
+
     except Exception as e:
-        print(f"Kite Connect Authentication Error: {e}")
+        print(f"❌ Kite Connect Exception: {e}")
         return None
+
 
 
 # =====================================================================
