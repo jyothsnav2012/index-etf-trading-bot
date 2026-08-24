@@ -2,9 +2,9 @@ name: Automated Index Trading Bot
 
 on:
   schedule:
-    # Runs Mon-Fri every 15 mins during market hours (03:45 UTC to 10:00 UTC)
+    # Runs every 15 minutes between 09:15 AM and 03:30 PM IST (03:45 to 10:00 UTC), Monday-Friday
     - cron: '*/15 3-10 * * 1-5'
-  workflow_dispatch: # Allows manual one-click testing from GitHub UI
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,14 +12,14 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
+          fetch-depth: 0
 
-      - name: Setup Python
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -27,7 +27,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install kiteconnect pandas pyotp requests
 
       - name: Execute Multi-Agent Trading Engine
         env:
@@ -38,11 +38,13 @@ jobs:
           KITE_TOTP_SECRET: ${{ secrets.KITE_TOTP_SECRET }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python bot.py
+        run: |
+          python bot.py
 
-      - name: Auto-Commit Trade Database and Memory
+      - name: Auto-Commit Trade Database, Memory and Dashboard
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A *.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update trade database & state [skip ci]" && git push origin main)
+          git pull --rebase origin main
+          git add -A docs/ *.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update state and web dashboard [skip ci]" && git push origin main)
