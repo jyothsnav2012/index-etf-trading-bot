@@ -247,11 +247,13 @@ def get_kite_session():
         login_res = session.post(
             "https://kite.zerodha.com/api/login",
             data={"user_id": user_id.strip(), "password": password.strip()},
-            timeout=10
+            timeout=10,
         ).json()
 
         if login_res.get("status") != "success":
-            print(f"❌ Step 1 (Login) Failed: {login_res.get('message', 'Check User ID / Password')}")
+            print(
+                f"❌ Step 1 (Login) Failed: {login_res.get('message', 'Check User ID / Password')}"
+            )
             return None
         print("✅ Step 1: User ID and Password verified.")
 
@@ -260,44 +262,54 @@ def get_kite_session():
         # Step 2: TOTP 2FA
         twofa_res = session.post(
             "https://kite.zerodha.com/api/twofa",
-            data={"user_id": user_id.strip(), "request_id": request_id, "twofa_value": totp, "skip_session": ""},
-            timeout=10
+            data={
+                "user_id": user_id.strip(),
+                "request_id": request_id,
+                "twofa_value": totp,
+                "skip_session": "",
+            },
+            timeout=10,
         ).json()
 
         if twofa_res.get("status") != "success":
-            print(f"❌ Step 2 (2FA) Failed: {twofa_res.get('message', 'Check KITE_TOTP_SECRET key')}")
+            print(
+                f"❌ Step 2 (2FA) Failed: {twofa_res.get('message', 'Check KITE_TOTP_SECRET key')}"
+            )
             return None
         print("✅ Step 2: 2FA TOTP verified.")
 
-        # Step 3: OAuth Token Extraction (v3 redirect handler)
+        # Step 3: OAuth Token Extraction
         req_url = f"https://kite.zerodha.com/connect/login?api_key={api_key.strip()}&v=3"
-        resp = session.get(req_url, allow_redirects=True, timeout=10)
+        request_token = None
 
-        redirect_url = resp.url
+        try:
+            resp = session.get(req_url, allow_redirects=True, timeout=10)
+            if "request_token=" in resp.url:
+                request_token = resp.url.split("request_token=")[1].split("&")[
+                    0
+                ]
+        except requests.exceptions.ConnectionError as ce:
+            url_str = str(ce)
+            if "request_token=" in url_str:
+                request_token = (
+                    url_str.split("request_token=")[1].split("&")[0].split(" ")[0].rstrip("')\"")
+                )
 
-        if "connect/authorize" in redirect_url:
-            try:
-                auth_resp = session.get(redirect_url, allow_redirects=False, timeout=10)
-                if "Location" in auth_resp.headers:
-                    redirect_url = auth_resp.headers["Location"]
-                else:
-                    redirect_url = auth_resp.url
-            except Exception:
-                pass
-
-        if "request_token=" not in redirect_url:
-            print(f"❌ Step 3 Failed: Redirect URL was {redirect_url}")
+        if not request_token:
+            print("❌ Step 3 Failed: Could not parse request_token.")
             return None
 
-        request_token = redirect_url.split("request_token=")[1].split("&")[0]
-        data = kite.generate_session(request_token, api_secret=api_secret.strip())
+        data = kite.generate_session(
+            request_token, api_secret=api_secret.strip()
+        )
         kite.set_access_token(data["access_token"])
-        print("✅ Step 3: Session established. Live data stream connected.")
+        print("✅ Step 3: Session established. Connected to live market data.")
         return kite
 
     except Exception as e:
         print(f"❌ Kite Connect Exception: {e}")
         return None
+
 
 # =====================================================================
 # 6. MARKET TIMING & TAX ENGINE
