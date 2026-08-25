@@ -493,3 +493,34 @@ if __name__ == "__main__":
 
     run_trading_engine()
     generate_web_dashboard()
+
+    # --- ADD THIS: Proactive heartbeat to Telegram on every run ---
+    trades = load_json(DB_FILE, [])
+    memory = load_json(
+        MEMORY_FILE,
+        {
+            "stcl_pool": 0.0,
+            "cooldowns": {},
+            "portfolio_peak": INITIAL_CAPITAL,
+        },
+    )
+    active_trades = [t for t in trades if t.get("status") == "OPEN"]
+
+    pos_text = ""
+    if not active_trades:
+        pos_text = "• *Active Slots:* 0/3 (100% Cash)\n"
+    else:
+        for t in active_trades:
+            pos_text += f"• `{t['symbol']}`: {t['units']} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
+
+    periodic_status = (
+        f"📊 *SWING ENGINE STATUS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 *Status:* Scan Complete\n"
+        f"⏰ *Server Time:* {datetime.now().strftime('%H:%M:%S IST')}\n"
+        f"💰 *Capital Base:* ₹1,00,000.00\n"
+        f"🛡️ *Tax Shield:* ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
+        f"*Open Positions ({len(active_trades)}/{MAX_ACTIVE_SLOTS}):*\n{pos_text}"
+        f"━━━━━━━━━━━━━━━━━━━━"
+    )
+    send_telegram(periodic_status)
