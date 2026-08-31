@@ -12,7 +12,7 @@ from kiteconnect import KiteConnect
 # 1. CONSTANTS, RISK RULES & WATCHLIST (10-SECTION ARCHITECTURE)
 # =====================================================================
 INITIAL_CAPITAL = 100000.0
-MAX_ACTIVE_SLOTS = 3
+MAX_SLOTS = 3
 MAX_RISK_PER_TRADE_PCT = 0.01 # 1% Account Risk per trade (₹1,000)
 BASE_TARGET_PCT = 0.035 # +3.5% Target (1:1.4 R:R)
 STOP_LOSS_PCT = 0.025 # -2.5% Stop-Loss
