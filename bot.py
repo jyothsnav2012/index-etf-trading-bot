@@ -29,13 +29,22 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # YFinance Tickers for NSE Instruments
 WATCHLIST = {
+    # Core Indices & Market Cap
     "NIFTYBEES": {"ticker": "NIFTYBEES.NS", "cluster": "BROAD_MARKET"},
     "JUNIORBEES": {"ticker": "JUNIORBEES.NS", "cluster": "BROAD_MARKET"},
+    "MID150BEES": {"ticker": "MID150BEES.NS", "cluster": "BROAD_MARKET"},
     "BANKBEES": {"ticker": "BANKBEES.NS", "cluster": "BROAD_MARKET"},
+    
+    # Sector & Thematic
     "ITBEES": {"ticker": "ITBEES.NS", "cluster": "TECH_EXPORT"},
     "AUTOBEES": {"ticker": "AUTOBEES.NS", "cluster": "AUTO_CYCLICAL"},
     "PHARMABEES": {"ticker": "PHARMABEES.NS", "cluster": "HEALTHCARE_DEFENSIVE"},
-    "GOLDBEES": {"ticker": "GOLDBEES.NS", "cluster": "COMMODITY_HEDGE"}
+    "FMCGIETF": {"ticker": "FMCGIETF.NS", "cluster": "CONSUMER_DEFENSIVE"},
+    
+    # Global & Commodities
+    "MON100": {"ticker": "MON100.NS", "cluster": "GLOBAL_TECH"},
+    "GOLDBEES": {"ticker": "GOLDBEES.NS", "cluster": "COMMODITY_HEDGE"},
+    "SILVERBEES": {"ticker": "SILVERBEES.NS", "cluster": "COMMODITY_HEDGE"}
 }
 
 # =====================================================================
