@@ -66,19 +66,19 @@ def save_json(filepath: str, data):
 # =====================================================================
 # 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
 # =====================================================================
-
 def send_telegram(message: str, reply_markup: dict = None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Telegram Error: Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secrets.")
         return
+    
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": str(TELEGRAM_CHAT_ID).strip(),
-        "text": message,
-        "parse_mode": "HTML"
+        "text": message
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
+        
     try:
         res = requests.post(url, json=payload, timeout=10).json()
         if not res.get("ok"):
@@ -88,9 +88,11 @@ def send_telegram(message: str, reply_markup: dict = None):
     except Exception as e:
         print(f"Telegram Dispatch Exception: {e}")
 
+
 def process_telegram_updates():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
+        
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
     try:
         res = requests.get(url, timeout=10).json()
@@ -98,79 +100,139 @@ def process_telegram_updates():
         print(f"Telegram Polling: Found {len(updates)} pending updates.")
         if not updates:
             return
-
+            
         trades = load_json(DB_FILE, [])
         memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
         active_trades = [t for t in trades if t.get("status") == "OPEN"]
         active_symbols = [t["symbol"] for t in active_trades]
+        
+        last_update_id = None
 
         for item in updates:
-            if "message" in item:
+            last_update_id = item["update_id"]
+            
+            # --- 1. Handle Inline Button Callback (BUY / PASS clicks) ---
+            if "callback_query" in item:
+                cb = item["callback_query"]
+                cb_id = cb.get("id")
+                cb_data = cb.get("data", "")
+                
+                # Acknowledge callback immediately to remove loading spinner in Telegram
+                try:
+                    ack_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+                    requests.post(ack_url, json={"callback_query_id": cb_id}, timeout=5)
+                except Exception:
+                    pass
+                
+                if cb_data.startswith("BUY:"):
+                    parts = cb_data.split(":")
+                    if len(parts) >= 5:
+                        _, sym, entry_str, qty_str, sl_str = parts[:5]
+                        entry_price = float(entry_str)
+                        qty = int(qty_str)
+                        sl_price = float(sl_str)
+                        
+                        # Check available slots (Max 3)
+                        current_open = [t for t in trades if t.get("status") == "OPEN"]
+                        if len(current_open) >= MAX_SLOTS:
+                            send_telegram(f"⚠️ Cannot execute BUY for {sym}: Maximum {MAX_SLOTS} slots already filled.")
+                        elif sym in [t["symbol"] for t in current_open]:
+                            send_telegram(f"ℹ️ Position for {sym} is already open.")
+                        else:
+                            new_trade = {
+                                "symbol": sym,
+                                "entry_price": entry_price,
+                                "units": qty,
+                                "remaining_units": qty,
+                                "sl": sl_price,
+                                "entry_date": datetime.now(IST).strftime("%Y-%m-%d"),
+                                "status": "OPEN",
+                                "leg1_done": False,
+                                "exit_price": None,
+                                "exit_date": None,
+                                "exit_reason": None
+                            }
+                            trades.append(new_trade)
+                            save_json(DB_FILE, trades)
+                            send_telegram(f"✅ Paper Trade Confirmed: Bought {qty} units of {sym} @ ₹{entry_price:.2f} (SL: ₹{sl_price:.2f}).")
+                
+                elif cb_data.startswith("PASS:"):
+                    sym = cb_data.split(":")[1] if ":" in cb_data else "Signal"
+                    send_telegram(f"⏭️ Signal for {sym} passed.")
+
+            # --- 2. Handle Text Commands (/status, /dashboard, /buy <symbol>) ---
+            elif "message" in item:
                 msg = item["message"]
                 text = msg.get("text", "").strip()
+                
                 if text in ["/start", "/status", "/dashboard", "/pnl"]:
                     pos_text = ""
-                    if not active_trades:
-                        pos_text = "• *Active Slots:* 0/3 (100% Cash)\n"
+                    current_open = [t for t in trades if t.get("status") == "OPEN"]
+                    if not current_open:
+                        pos_text = "• Active Slots: 0/3 (100% Cash)\n"
                     else:
-                        for t in active_trades:
+                        for t in current_open:
                             pos_text += f"• `{t['symbol']}`: {t['units']} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
-                    
+                            
                     status_report = (
-                        f"📊 *SWING ENGINE STATUS*\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🟢 *Status:* Online & Active\n"
-                        f"⏰ *Server Time:* {datetime.now().strftime('%H:%M:%S IST')}\n"
-                        f"💰 *Capital Base:* ₹1,00,000.00\n"
-                        f"🛡️ *Tax Shield:* ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
-                        f"*Open Positions ({len(active_trades)}/{MAX_ACTIVE_SLOTS}):*\n{pos_text}"
-                        f"━━━━━━━━━━━━━━━━━━━━"
+                        "📊 SWING ENGINE STATUS\n"
+                        "━━━━━━━━━━━━━━━━━━━━\n"
+                        "🟢 Status: Online & Active\n"
+                        f"⏰ Server Time: {datetime.now(IST).strftime('%H:%M:%S IST')}\n"
+                        f"💰 Capital Base: ₹{INITIAL_CAPITAL:,.2f}\n"
+                        f"🛡️ Tax Shield: ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
+                        f"Open Positions ({len(current_open)}/{MAX_SLOTS}):\n"
+                        f"{pos_text}"
+                        "━━━━━━━━━━━━━━━━━━━━"
                     )
                     send_telegram(status_report)
+                    
+                elif text.startswith("/buy "):
+                    sym = text.split()[1].upper().replace(".NS", "")
+                    current_open = [t for t in trades if t.get("status") == "OPEN"]
+                    if len(current_open) >= MAX_SLOTS:
+                        send_telegram(f"⚠️ Cannot execute BUY for {sym}: Maximum {MAX_SLOTS} slots already filled.")
+                    elif sym in [t["symbol"] for t in current_open]:
+                        send_telegram(f"ℹ️ Position for {sym} is already active.")
+                    else:
+                        # Auto-fetch latest close if bought manually via text
+                        try:
+                            ticker_key = f"{sym}.NS" if not sym.endswith(".NS") else sym
+                            df = yf.download(ticker_key, period="5d", interval="1d", progress=False)
+                            if not df.empty:
+                                close_p = float(df['Close'].iloc[-1])
+                                slot_cap = INITIAL_CAPITAL / MAX_SLOTS
+                                units = int(slot_cap / close_p)
+                                sl = round(close_p * (1.0 - STOP_LOSS_PCT), 2)
+                                new_trade = {
+                                    "symbol": sym,
+                                    "entry_price": round(close_p, 2),
+                                    "units": units,
+                                    "remaining_units": units,
+                                    "sl": sl,
+                                    "entry_date": datetime.now(IST).strftime("%Y-%m-%d"),
+                                    "status": "OPEN",
+                                    "leg1_done": False,
+                                    "exit_price": None,
+                                    "exit_date": None,
+                                    "exit_reason": None
+                                }
+                                trades.append(new_trade)
+                                save_json(DB_FILE, trades)
+                                send_telegram(f"✅ Paper Trade Confirmed: Bought {units} units of {sym} @ ₹{close_p:.2f} (SL: ₹{sl:.2f}).")
+                        except Exception as ex:
+                            send_telegram(f"❌ Error executing text order for {sym}: {ex}")
 
-            elif "callback_query" in item:
-                cb = item["callback_query"]
-                cb_id = cb["id"]
-                data = cb.get("data", "")
-                msg_id = cb["message"]["message_id"]
+        # Clear processed updates from Telegram's queue
+        if last_update_id is not None:
+            try:
+                requests.get(f"{url}?offset={last_update_id + 1}", timeout=5)
+            except Exception:
+                pass
 
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cb_id})
-
-                if data.startswith("BUY:"):
-                    _, sym, entry, qty, stop = data.split(":")
-                    if sym not in active_symbols:
-                        new_trade = {
-                            "symbol": sym,
-                            "entry_price": float(entry),
-                            "units": int(qty),
-                            "remaining_units": int(qty),
-                            "sl": float(stop),
-                            "entry_date": datetime.now().strftime("%Y-%m-%d"),
-                            "status": "OPEN",
-                            "leg1_done": False
-                        }
-                        trades.append(new_trade)
-                        active_symbols.append(sym)
-                        save_json(DB_FILE, trades)
-                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
-                            "chat_id": TELEGRAM_CHAT_ID,
-                            "message_id": msg_id,
-                            "text": f"✅ *TRADE LOGGED: {sym}*\nRecorded {qty} units @ ₹{entry}.",
-                            "parse_mode": "Markdown"
-                        })
-                elif data.startswith("PASS:"):
-                    _, sym = data.split(":")
-                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText", json={
-                        "chat_id": TELEGRAM_CHAT_ID,
-                        "message_id": msg_id,
-                        "text": f"❌ *SIGNAL SKIPPED: {sym}*",
-                        "parse_mode": "Markdown"
-                    })
-
-        last_id = updates[-1]["update_id"]
-        requests.get(f"{url}?offset={last_id + 1}")
     except Exception as e:
-        print(f"Telegram Updates Parsing Error: {e}")
+        print(f"Telegram polling error: {e}")
+
 
 # =====================================================================
 # 4. STATIC WEB DASHBOARD GENERATOR (docs/index.html)
