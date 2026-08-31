@@ -1,1 +1,12 @@
-[]
+[
+    {
+        "symbol": "MID150BEES",
+        "entry_price": 242.15,
+        "units": 137,
+        "remaining_units": 137,
+        "sl": 236.1,
+        "entry_date": "2026-08-31",
+        "status": "OPEN",
+        "leg1_done": false
+    }
+]
