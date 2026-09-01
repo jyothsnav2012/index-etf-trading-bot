@@ -5,8 +5,10 @@ import pyotp
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from kiteconnect import KiteConnect
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # =====================================================================
 # 1. CONSTANTS, RISK RULES & WATCHLIST (10-SECTION ARCHITECTURE)
