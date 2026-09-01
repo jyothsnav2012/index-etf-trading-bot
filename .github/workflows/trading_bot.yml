@@ -47,5 +47,5 @@ jobs:
           git stash --include-untracked || true
           git pull --rebase origin main || true
           git stash pop || true
-          git add -A index.html docs/index.html *.json
+          git add docs/ *.json
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update state and dashboard [skip ci]" && git push origin main)
