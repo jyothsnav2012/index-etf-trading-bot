@@ -111,13 +111,12 @@ def process_telegram_updates():
         for item in updates:
             last_update_id = item["update_id"]
             
-            # --- 1. Handle Inline Button Callback (BUY / PASS clicks) ---
+            # 1. Handle Inline Button Callback (BUY / PASS clicks)
             if "callback_query" in item:
                 cb = item["callback_query"]
                 cb_id = cb.get("id")
                 cb_data = cb.get("data", "")
                 
-                # Acknowledge callback immediately to remove loading spinner in Telegram
                 try:
                     ack_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
                     requests.post(ack_url, json={"callback_query_id": cb_id}, timeout=5)
@@ -159,7 +158,7 @@ def process_telegram_updates():
                     sym = cb_data.split(":")[1] if ":" in cb_data else "Signal"
                     send_telegram(f"⏭️ Signal for {sym} passed.")
 
-            # --- 2. Handle Text Commands (/status, /dashboard, /buy <symbol>) ---
+            # 2. Handle Text Commands (/status, /dashboard, /buy <symbol>)
             elif "message" in item:
                 msg = item["message"]
                 text = msg.get("text", "").strip()
@@ -199,7 +198,6 @@ def process_telegram_updates():
                             df = yf.download(ticker_key, period="5d", interval="1d", progress=False)
                             if not df.empty:
                                 close_val = df['Close'].iloc[-1]
-                                # Safe float extraction for scalar, Series, or multi-index df
                                 if hasattr(close_val, "iloc"):
                                     close_p = float(close_val.iloc[0])
                                 elif hasattr(close_val, "item"):
@@ -231,7 +229,7 @@ def process_telegram_updates():
                         except Exception as ex:
                             send_telegram(f"❌ Error executing text order for {sym}: {ex}")
 
-        # Clear processed updates from Telegram's queue
+        # Clear processed updates from Telegram queue
         if last_update_id is not None:
             try:
                 requests.get(f"{url}?offset={last_update_id + 1}", timeout=5)
@@ -240,7 +238,6 @@ def process_telegram_updates():
 
     except Exception as e:
         print(f"Telegram polling error: {e}")
-
 
 # =====================================================================
 # 4. STATIC WEB DASHBOARD GENERATOR (docs/index.html)
