@@ -67,7 +67,7 @@ def save_json(filepath: str, data):
 # =====================================================================
 # 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
 # =====================================================================
-def send_telegram(message: str, reply_markup: dict = None):
+ def send_telegram(message: str, reply_markup: dict = None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Telegram Error: Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secrets.")
         return
@@ -104,8 +104,7 @@ def process_telegram_updates():
             
         trades = load_json(DB_FILE, [])
         memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
-        active_trades = [t for t in trades if t.get("status") == "OPEN"]
-        active_symbols = [t["symbol"] for t in active_trades]
+        max_slots = globals().get("MAX_ACTIVE_SLOTS", globals().get("MAX_SLOTS", 3))
         
         last_update_id = None
 
@@ -133,12 +132,11 @@ def process_telegram_updates():
                         qty = int(qty_str)
                         sl_price = float(sl_str)
                         
-                        # Check available slots (Max 3)
                         current_open = [t for t in trades if t.get("status") == "OPEN"]
-                        if len(current_open) >= MAX_SLOTS:
-                            send_telegram(f"⚠️ Cannot execute BUY for {sym}: Maximum {MAX_SLOTS} slots already filled.")
+                        if len(current_open) >= max_slots:
+                            send_telegram(f"⚠️ Cannot execute BUY for {sym}: Maximum {max_slots} slots already filled.")
                         elif sym in [t["symbol"] for t in current_open]:
-                            send_telegram(f"ℹ️ Position for {sym} is already open.")
+                            send_telegram(f"ℹ️ Position for {sym} is already active.")
                         else:
                             new_trade = {
                                 "symbol": sym,
@@ -170,7 +168,7 @@ def process_telegram_updates():
                     pos_text = ""
                     current_open = [t for t in trades if t.get("status") == "OPEN"]
                     if not current_open:
-                        pos_text = "• Active Slots: 0/3 (100% Cash)\n"
+                        pos_text = f"• Active Slots: 0/{max_slots} (100% Cash)\n"
                     else:
                         for t in current_open:
                             pos_text += f"• `{t['symbol']}`: {t['units']} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
@@ -182,7 +180,7 @@ def process_telegram_updates():
                         f"⏰ Server Time: {datetime.now(IST).strftime('%H:%M:%S IST')}\n"
                         f"💰 Capital Base: ₹{INITIAL_CAPITAL:,.2f}\n"
                         f"🛡️ Tax Shield: ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
-                        f"Open Positions ({len(current_open)}/{MAX_SLOTS}):\n"
+                        f"Open Positions ({len(current_open)}/{max_slots}):\n"
                         f"{pos_text}"
                         "━━━━━━━━━━━━━━━━━━━━"
                     )
@@ -191,20 +189,29 @@ def process_telegram_updates():
                 elif text.startswith("/buy "):
                     sym = text.split()[1].upper().replace(".NS", "")
                     current_open = [t for t in trades if t.get("status") == "OPEN"]
-                    if len(current_open) >= MAX_SLOTS:
-                        send_telegram(f"⚠️ Cannot execute BUY for {sym}: Maximum {MAX_SLOTS} slots already filled.")
+                    if len(current_open) >= max_slots:
+                        send_telegram(f"⚠️ Cannot execute BUY for {sym}: Maximum {max_slots} slots already filled.")
                     elif sym in [t["symbol"] for t in current_open]:
                         send_telegram(f"ℹ️ Position for {sym} is already active.")
                     else:
-                        # Auto-fetch latest close if bought manually via text
                         try:
                             ticker_key = f"{sym}.NS" if not sym.endswith(".NS") else sym
                             df = yf.download(ticker_key, period="5d", interval="1d", progress=False)
                             if not df.empty:
-                                close_p = float(df['Close'].iloc[-1])
-                                slot_cap = INITIAL_CAPITAL / MAX_SLOTS
+                                close_val = df['Close'].iloc[-1]
+                                # Safe float extraction for scalar, Series, or multi-index df
+                                if hasattr(close_val, "iloc"):
+                                    close_p = float(close_val.iloc[0])
+                                elif hasattr(close_val, "item"):
+                                    close_p = float(close_val.item())
+                                else:
+                                    close_p = float(close_val)
+                                    
+                                slot_cap = INITIAL_CAPITAL / max_slots
                                 units = int(slot_cap / close_p)
-                                sl = round(close_p * (1.0 - STOP_LOSS_PCT), 2)
+                                sl_pct = globals().get("STOP_LOSS_PCT", 0.025)
+                                sl = round(close_p * (1.0 - sl_pct), 2)
+                                
                                 new_trade = {
                                     "symbol": sym,
                                     "entry_price": round(close_p, 2),
