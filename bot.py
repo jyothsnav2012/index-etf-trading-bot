@@ -676,7 +676,7 @@ def run_trading_engine():
     open_trades = [t for t in trades if t.get("status") == "OPEN"]
     
     # Refresh GitHub Pages Monitor Dashboard
-    generate_html_dashboard(trades, memory)
+    generate_html_dashboard(trades, memory,market_data=market_data)
     
     # Send Scan Completion Summary
     pos_summary = ""
