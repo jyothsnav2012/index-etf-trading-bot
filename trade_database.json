@@ -8,5 +8,18 @@
         "entry_date": "2026-08-31",
         "status": "OPEN",
         "leg1_done": false
+    },
+    {
+        "symbol": "PHARMABEES",
+        "entry_price": 27.6,
+        "units": 1207,
+        "remaining_units": 1207,
+        "sl": 26.91,
+        "entry_date": "2026-09-01",
+        "status": "OPEN",
+        "leg1_done": false,
+        "exit_price": null,
+        "exit_date": null,
+        "exit_reason": null
     }
 ]
