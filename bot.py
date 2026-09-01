@@ -67,7 +67,7 @@ def save_json(filepath: str, data):
 # =====================================================================
 # 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
 # =====================================================================
- def send_telegram(message: str, reply_markup: dict = None):
+def send_telegram(message: str, reply_markup: dict = None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ Telegram Error: Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secrets.")
         return
@@ -88,7 +88,6 @@ def save_json(filepath: str, data):
             print("✅ Telegram notification sent successfully.")
     except Exception as e:
         print(f"Telegram Dispatch Exception: {e}")
-
 
 def process_telegram_updates():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
