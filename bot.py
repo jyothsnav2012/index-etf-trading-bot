@@ -29,7 +29,7 @@ TRAILING_EMA_PERIOD = 20 # Trailing filter for Leg 2 runner
 DB_FILE = "trade_database.json"
 MEMORY_FILE = "strategy_memory.json"
 HOLIDAYS_CACHE_FILE = "holidays_cache.json"
-DASHBOARD_FILE = "index.html"
+DASHBOARD_FILE = "docs/index.html" if os.path.exists("docs") else "index.html"
 
 # Environment / Secret Credentials
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
