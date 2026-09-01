@@ -487,77 +487,169 @@ def manage_positions_and_scan(market_data, regime):
 # 9. AGENT 5 & 6: TAX SHIELD & EXECUTION ENGINE
 # ==============================================================================
 
-def generate_html_dashboard(trades, memory):
+def generate_html_dashboard(trades, memory, market_data=None):
     open_trades = [t for t in trades if t.get("status") == "OPEN"]
     closed_trades = [t for t in trades if t.get("status") == "CLOSED"]
     
-    table_rows = ""
+    total_unrealized_pnl = 0.0
+    total_realized_pnl = 0.0
+    wins = 0
+
+    # Build Open Positions Rows
+    open_rows = ""
     for t in open_trades:
-        table_rows += f"""
+        sym = t["symbol"]
+        entry = float(t["entry_price"])
+        rem_units = int(t.get("remaining_units", t["units"]))
+        
+        # Get Live/Current Price from market_data if available
+        ltp = entry
+        if market_data and sym in market_data and not market_data[sym].empty:
+            ltp = safe_float(market_data[sym]["Close"].iloc[-1])
+            
+        unrealized_pnl = (ltp - entry) * rem_units
+        unrealized_pnl_pct = ((ltp - entry) / entry) * 100.0 if entry > 0 else 0.0
+        total_unrealized_pnl += unrealized_pnl
+        
+        pnl_color = "#34d399" if unrealized_pnl >= 0 else "#f87171"
+        pnl_sign = "+" if unrealized_pnl >= 0 else ""
+        
+        target1 = round(entry * (1.0 + BASE_TARGET_PCT), 2)
+        leg1_status = "🎯 Booked" if t.get("leg1_done") else f"₹{target1:.2f}"
+
+        open_rows += f"""
         <tr>
             <td><span class="badge badge-open">OPEN</span></td>
-            <td><strong>{t['symbol']}</strong></td>
-            <td>₹{t['entry_price']:.2f}</td>
-            <td>{t.get('remaining_units', t['units'])}</td>
-            <td>₹{t['sl']:.2f}</td>
+            <td><strong>{sym}</strong></td>
+            <td>₹{entry:.2f}</td>
+            <td>₹{ltp:.2f}</td>
+            <td>{rem_units}</td>
+            <td>₹{float(t['sl']):.2f}</td>
+            <td>{leg1_status}</td>
+            <td style="color: {pnl_color}; font-weight: bold;">
+                {pnl_sign}₹{unrealized_pnl:.2f} ({pnl_sign}{unrealized_pnl_pct:.2f}%)
+            </td>
             <td>{t['entry_date']}</td>
         </tr>
         """
-    for t in closed_trades[-10:]:
-        table_rows += f"""
+
+    # Build Closed Positions Rows
+    closed_rows = ""
+    for t in closed_trades[::-1]: # Latest closed first
+        entry = float(t["entry_price"])
+        exit_p = float(t.get("exit_price", 0.0))
+        units = int(t["units"])
+        realized_pnl = (exit_p - entry) * units if exit_p > 0 else 0.0
+        realized_pnl_pct = ((exit_p - entry) / entry) * 100.0 if entry > 0 else 0.0
+        total_realized_pnl += realized_pnl
+        
+        if realized_pnl > 0:
+            wins += 1
+            
+        pnl_color = "#34d399" if realized_pnl >= 0 else "#f87171"
+        pnl_sign = "+" if realized_pnl >= 0 else ""
+
+        closed_rows += f"""
         <tr>
             <td><span class="badge badge-closed">CLOSED</span></td>
-            <td>{t['symbol']}</td>
-            <td>₹{t['entry_price']:.2f}</td>
-            <td>{t['units']}</td>
-            <td>₹{t.get('exit_price', 0.0):.2f}</td>
+            <td><strong>{t['symbol']}</strong></td>
+            <td>₹{entry:.2f}</td>
+            <td>₹{exit_p:.2f}</td>
+            <td>{units}</td>
+            <td>{t.get('exit_reason', '-')}</td>
+            <td style="color: {pnl_color}; font-weight: bold;">
+                {pnl_sign}₹{realized_pnl:.2f} ({pnl_sign}{realized_pnl_pct:.2f}%)
+            </td>
             <td>{t.get('exit_date', '-')}</td>
         </tr>
         """
+
+    total_closed = len(closed_trades)
+    win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
+    net_equity = INITIAL_CAPITAL + total_realized_pnl + total_unrealized_pnl
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETF Swing Trading Dashboard</title>
+    <title>ETF Swing Trading Terminal & PnL</title>
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; }}
-        .container {{ max-width: 1000px; margin: auto; }}
-        .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }}
-        .card {{ background: #1e293b; padding: 18px; border-radius: 10px; border: 1px solid #334155; }}
-        .card h4 {{ margin: 0 0 8px 0; color: #94a3b8; font-size: 13px; text-transform: uppercase; }}
-        .card p {{ margin: 0; font-size: 24px; font-weight: bold; color: #38bdf8; }}
-        table {{ width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 10px; overflow: hidden; }}
-        th, td {{ padding: 12px 16px; text-align: left; border-bottom: 1px solid #334155; }}
-        th {{ background: #0f172a; color: #94a3b8; font-size: 13px; text-transform: uppercase; }}
-        .badge {{ padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
-        .badge-open {{ background: #065f46; color: #34d399; }}
-        .badge-closed {{ background: #475569; color: #cbd5e1; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 24px; margin: 0; }}
+        .container {{ max-width: 1200px; margin: auto; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 16px; margin-bottom: 24px; }}
+        .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }}
+        .card {{ background: #131c2e; padding: 16px; border-radius: 8px; border: 1px solid #1e293b; }}
+        .card h4 {{ margin: 0 0 6px 0; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }}
+        .card p {{ margin: 0; font-size: 20px; font-weight: bold; color: #f8fafc; }}
+        .section-title {{ font-size: 16px; font-weight: bold; margin: 24px 0 12px 0; color: #38bdf8; text-transform: uppercase; }}
+        table {{ width: 100%; border-collapse: collapse; background: #131c2e; border-radius: 8px; overflow: hidden; margin-bottom: 24px; }}
+        th, td {{ padding: 12px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #1e293b; }}
+        th {{ background: #0f172a; color: #94a3b8; font-size: 11px; text-transform: uppercase; }}
+        .badge {{ padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; }}
+        .badge-open {{ background: #064e3b; color: #34d399; }}
+        .badge-closed {{ background: #334155; color: #cbd5e1; }}
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>⚡ Index & Sector ETF Swing Monitor</h2>
+        <div class="header">
+            <div>
+                <h2 style="margin:0;">⚡ ETF Swing Trading Command Center</h2>
+                <small style="color:#64748b;">Autonomous Multi-Agent Engine</small>
+            </div>
+            <div style="text-align:right;">
+                <span style="color:#34d399; font-weight:bold;">● ENGINE LIVE</span><br>
+                <small style="color:#94a3b8;">Updated: {datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S IST')}</small>
+            </div>
+        </div>
+
         <div class="card-grid">
             <div class="card"><h4>Active Slots</h4><p>{len(open_trades)} / {MAX_ACTIVE_SLOTS}</p></div>
             <div class="card"><h4>Capital Base</h4><p>₹{INITIAL_CAPITAL:,.2f}</p></div>
-            <div class="card"><h4>STCL Shield Pool</h4><p>₹{memory.get('stcl_pool', 0.0):,.2f}</p></div>
-            <div class="card"><h4>Last Updated</h4><p style="font-size:16px; color:#94a3b8;">{datetime.now(IST).strftime('%H:%M IST')}</p></div>
+            <div class="card"><h4>Net Portfolio Value</h4><p>₹{net_equity:,.2f}</p></div>
+            <div class="card"><h4>Unrealized P&L</h4><p style="color: {'#34d399' if total_unrealized_pnl >= 0 else '#f87171'};">{' ' if total_unrealized_pnl >= 0 else ''}₹{total_unrealized_pnl:,.2f}</p></div>
+            <div class="card"><h4>Realized P&L</h4><p style="color: {'#34d399' if total_realized_pnl >= 0 else '#f87171'};">{' ' if total_realized_pnl >= 0 else ''}₹{total_realized_pnl:,.2f}</p></div>
+            <div class="card"><h4>STCL Shield Pool</h4><p style="color:#a78bfa;">₹{memory.get('stcl_pool', 0.0):,.2f}</p></div>
+            <div class="card"><h4>Win Rate</h4><p>{win_rate:.1f}% ({wins}/{total_closed})</p></div>
         </div>
+
+        <div class="section-title">Active Holdings</div>
         <table>
             <thead>
                 <tr>
                     <th>Status</th>
                     <th>Symbol</th>
-                    <th>Entry Price</th>
-                    <th>Units</th>
-                    <th>SL / Exit</th>
-                    <th>Date</th>
+                    <th>Entry</th>
+                    <th>LTP</th>
+                    <th>Qty</th>
+                    <th>SL</th>
+                    <th>Target 1</th>
+                    <th>Unrealized P&L</th>
+                    <th>Entry Date</th>
                 </tr>
             </thead>
             <tbody>
-                {table_rows}
+                {open_rows if open_rows else '<tr><td colspan="9" style="text-align:center; color:#64748b;">No active positions (100% Cash)</td></tr>'}
+            </tbody>
+        </table>
+
+        <div class="section-title">Trade History & Realized P&L</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Symbol</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Units</th>
+                    <th>Reason</th>
+                    <th>Realized P&L</th>
+                    <th>Exit Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {closed_rows if closed_rows else '<tr><td colspan="8" style="text-align:center; color:#64748b;">No closed trades yet</td></tr>'}
             </tbody>
         </table>
     </div>
