@@ -3,40 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETF Trading Engine Monitor</title>
+    <title>ETF Swing Trading Terminal & PnL</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 16px; }
-        .container { max-width: 650px; margin: 0 auto; }
-        h2 { font-size: 20px; margin-bottom: 16px; color: #38bdf8; display: flex; justify-content: space-between; align-items: center; }
-        .badge { background: #10b981; color: white; padding: 4px 8px; border-radius: 6px; font-size: 11px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-        .card { background: #1e293b; border-radius: 12px; padding: 14px; border: 1px solid #334155; }
-        .card-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
-        .card-val { font-size: 18px; font-weight: bold; margin-top: 6px; }
-        .section-card { background: #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 16px; border: 1px solid #334155; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th, td { text-align: left; padding: 10px 4px; border-bottom: 1px solid #334155; }
-        th { color: #94a3b8; font-size: 11px; text-transform: uppercase; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 24px; margin: 0; }
+        .container { max-width: 1200px; margin: auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 16px; margin-bottom: 24px; }
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }
+        .card { background: #131c2e; padding: 16px; border-radius: 8px; border: 1px solid #1e293b; }
+        .card h4 { margin: 0 0 6px 0; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .card p { margin: 0; font-size: 20px; font-weight: bold; color: #f8fafc; }
+        .section-title { font-size: 16px; font-weight: bold; margin: 24px 0 12px 0; color: #38bdf8; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; background: #131c2e; border-radius: 8px; overflow: hidden; margin-bottom: 24px; }
+        th, td { padding: 12px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #1e293b; }
+        th { background: #0f172a; color: #94a3b8; font-size: 11px; text-transform: uppercase; }
+        .badge { padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; }
+        .badge-open { background: #064e3b; color: #34d399; }
+        .badge-closed { background: #334155; color: #cbd5e1; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2><span>⚡ Multi-Agent ETF Engine</span><span class="badge">ONLINE</span></h2>
-        <div class="grid">
-            <div class="card"><div class="card-label">Last Polled</div><div class="card-val">03:32 IST</div></div>
-            <div class="card"><div class="card-label">Active Slots</div><div class="card-val">2 / 3</div></div>
-            <div class="card"><div class="card-label">Capital Base</div><div class="card-val">₹1,00,000</div></div>
-            <div class="card"><div class="card-label">Tax Shield</div><div class="card-val">₹0.00</div></div>
+        <div class="header">
+            <div>
+                <h2 style="margin:0;">⚡ ETF Swing Trading Command Center</h2>
+                <small style="color:#64748b;">Autonomous Multi-Agent Engine</small>
+            </div>
+            <div style="text-align:right;">
+                <span style="color:#34d399; font-weight:bold;">● ENGINE LIVE</span><br>
+                <small style="color:#94a3b8;">Updated: 2026-09-01 21:27:34 IST</small>
+            </div>
         </div>
-        <div class="section-card">
-            <div style="font-weight:bold; margin-bottom:10px; color:#e2e8f0;">Active Positions</div>
-            <table><thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Stop-Loss</th></tr></thead><tbody><tr><td><b>MID150BEES</b></td><td>137</td><td>₹242.15</td><td>₹236.1</td></tr><tr><td><b>PHARMABEES</b></td><td>1207</td><td>₹27.6</td><td>₹26.91</td></tr></tbody></table>
+
+        <div class="card-grid">
+            <div class="card"><h4>Active Slots</h4><p>3 / 3</p></div>
+            <div class="card"><h4>Capital Base</h4><p>₹100,000.00</p></div>
+            <div class="card"><h4>Net Portfolio Value</h4><p>₹99,440.57</p></div>
+            <div class="card"><h4>Unrealized P&L</h4><p style="color: #f87171;">₹-559.43</p></div>
+            <div class="card"><h4>Realized P&L</h4><p style="color: #34d399;"> ₹0.00</p></div>
+            <div class="card"><h4>STCL Shield Pool</h4><p style="color:#a78bfa;">₹0.00</p></div>
+            <div class="card"><h4>Win Rate</h4><p>0.0% (0/0)</p></div>
         </div>
-        <div class="section-card">
-            <div style="font-weight:bold; margin-bottom:10px; color:#e2e8f0;">Recent Trades</div>
-            <table><thead><tr><th>Symbol</th><th>Exit Reason</th><th>Date</th></tr></thead><tbody><tr><td colspan="3" style="text-align:center; color:#64748b; padding:12px;">No closed trades logged yet</td></tr></tbody></table>
-        </div>
+
+        <div class="section-title">Active Holdings</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Symbol</th>
+                    <th>Entry</th>
+                    <th>LTP</th>
+                    <th>Qty</th>
+                    <th>SL</th>
+                    <th>Target 1</th>
+                    <th>Unrealized P&L</th>
+                    <th>Entry Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                
+        <tr>
+            <td><span class="badge badge-open">OPEN</span></td>
+            <td><strong>MID150BEES</strong></td>
+            <td>₹242.15</td>
+            <td>₹240.53</td>
+            <td>137</td>
+            <td>₹236.10</td>
+            <td>₹250.63</td>
+            <td style="color: #f87171; font-weight: bold;">
+                ₹-221.94 (-0.67%)
+            </td>
+            <td>2026-08-31</td>
+        </tr>
+        
+        <tr>
+            <td><span class="badge badge-open">OPEN</span></td>
+            <td><strong>PHARMABEES</strong></td>
+            <td>₹27.60</td>
+            <td>₹27.53</td>
+            <td>1207</td>
+            <td>₹26.91</td>
+            <td>₹28.57</td>
+            <td style="color: #f87171; font-weight: bold;">
+                ₹-84.49 (-0.25%)
+            </td>
+            <td>2026-09-01</td>
+        </tr>
+        
+        <tr>
+            <td><span class="badge badge-open">OPEN</span></td>
+            <td><strong>BANKBEES</strong></td>
+            <td>₹598.39</td>
+            <td>₹593.79</td>
+            <td>55</td>
+            <td>₹583.43</td>
+            <td>₹619.33</td>
+            <td style="color: #f87171; font-weight: bold;">
+                ₹-253.00 (-0.77%)
+            </td>
+            <td>2026-09-01</td>
+        </tr>
+        
+            </tbody>
+        </table>
+
+        <div class="section-title">Trade History & Realized P&L</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Symbol</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Units</th>
+                    <th>Reason</th>
+                    <th>Realized P&L</th>
+                    <th>Exit Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="8" style="text-align:center; color:#64748b;">No closed trades yet</td></tr>
+            </tbody>
+        </table>
     </div>
 </body>
 </html>
