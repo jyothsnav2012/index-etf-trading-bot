@@ -502,14 +502,14 @@ def manage_positions_and_scan(market_data, regime):
                 stop_loss = round(close * (1 - STOP_LOSS_PCT), 2)
 
                 if qty > 0:
-                reply_markup = {
-                    "inline_keyboard": [
-                        [
-                            {"text": f"🟢 BUY {qty} units", "callback_data": f"BUY:{sym}:{round(close, 2)}:{qty}:{stop_loss}"},
-                            {"text": "⚪ PASS", "callback_data": f"PASS:{sym}"}
+                    reply_markup = {
+                        "inline_keyboard": [
+                            [
+                                {"text": f"🟢 BUY {qty} units", "callback_data": f"BUY:{sym}:{round(close, 2)}:{qty}:{stop_loss}"},
+                                {"text": "⚪ PASS", "callback_data": f"PASS:{sym}"}
+                            ]
                         ]
-                    ]
-                }
+                    }
                     signal_card = (
                         f"⚡ *NEW SWING SIGNAL DETECTED*\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
