@@ -113,14 +113,18 @@ def send_telegram(message: str, reply_markup: dict = None):
     except Exception as e:
         print(f"Telegram Dispatch Exception: {e}")
 
-
 def process_telegram_updates():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
         
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    payload = {
+        "allowed_updates": ["message", "callback_query"],
+        "timeout": 5
+    }
+    
     try:
-        res = requests.get(url, timeout=10).json()
+        res = requests.post(url, json=payload, timeout=10).json()
         updates = res.get("result", [])
         print(f"Telegram Polling: Found {len(updates)} pending updates.")
         if not updates:
@@ -142,7 +146,7 @@ def process_telegram_updates():
             qty = None
             sl_price = None
             
-            # --- 1. Handle Inline Button Callback (BUY / PASS clicks) ---
+            # --- 1. Handle Inline Button Callback (BUY / PASS) ---
             if "callback_query" in item:
                 cb = item["callback_query"]
                 cb_id = cb.get("id")
@@ -159,13 +163,16 @@ def process_telegram_updates():
                     if len(parts) >= 2:
                         action_symbol = parts[1].upper().replace(".NS", "")
                     if len(parts) >= 5:
-                        entry_price = float(parts[2])
-                        qty = int(parts[3])
-                        sl_price = float(parts[4])
+                        try:
+                            entry_price = float(parts[2])
+                            qty = int(parts[3])
+                            sl_price = float(parts[4])
+                        except ValueError:
+                            pass
                 
                 elif cb_data.startswith("PASS:"):
                     sym = cb_data.split(":")[1] if ":" in cb_data else "Signal"
-                    send_telegram(f"⏭️ Signal for `{sym}` passed.")
+                    send_telegram(f"⏭️ Signal for {sym} passed.")
                     continue
 
             # --- 2. Handle Text Commands (/status, /dashboard, /buy <symbol>) ---
@@ -180,16 +187,16 @@ def process_telegram_updates():
                         pos_text = f"• Active Slots: 0/{max_slots} (100% Cash)\n"
                     else:
                         for t in current_open:
-                            pos_text += f"• `{t['symbol']}`: {t['units']} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
+                            pos_text += f"• {t['symbol']}: {t['units']} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
                             
                     status_report = (
-                        "📊 *SWING ENGINE STATUS*\n"
+                        "📊 SWING ENGINE STATUS\n"
                         "━━━━━━━━━━━━━━━━━━━━\n"
-                        "🟢 *Status:* Online & Active\n"
-                        f"⏰ *Server Time:* {current_time_str}\n"
-                        f"💰 *Capital Base:* ₹{INITIAL_CAPITAL:,.2f}\n"
-                        f"🛡️ *Tax Shield:* ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
-                        f"*Open Positions ({len(current_open)}/{max_slots}):*\n"
+                        "🟢 Status: Online & Active\n"
+                        f"⏰ Server Time: {current_time_str}\n"
+                        f"💰 Capital Base: ₹{INITIAL_CAPITAL:,.2f}\n"
+                        f"🛡️ Tax Shield: ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
+                        f"Open Positions ({len(current_open)}/{max_slots}):\n"
                         f"{pos_text}"
                         "━━━━━━━━━━━━━━━━━━━━"
                     )
@@ -201,16 +208,15 @@ def process_telegram_updates():
                     if len(parts) > 1:
                         action_symbol = parts[1].upper().replace(".NS", "")
 
-            # --- 3. Unified Trade Execution Router ---
+            # --- 3. Unified Trade Execution ---
             if action_symbol:
                 current_open = [t for t in trades if t.get("status") == "OPEN"]
                 if len(current_open) >= max_slots:
-                    send_telegram(f"⚠️ Cannot execute BUY for `{action_symbol}`: Maximum {max_slots} slots already filled.")
+                    send_telegram(f"⚠️ Cannot execute BUY for {action_symbol}: Maximum {max_slots} slots already filled.")
                 elif action_symbol in [t["symbol"] for t in current_open]:
-                    send_telegram(f"ℹ️ Position for `{action_symbol}` is already active.")
+                    send_telegram(f"ℹ️ Position for {action_symbol} is already active.")
                 else:
                     try:
-                        # If price/qty were missing in callback payload, fetch fresh
                         if entry_price is None or qty is None or sl_price is None:
                             ticker_key = f"{action_symbol}.NS" if not action_symbol.endswith(".NS") else action_symbol
                             df = yf.download(ticker_key, period="5d", interval="1d", progress=False)
@@ -237,20 +243,19 @@ def process_telegram_updates():
                             }
                             trades.append(new_trade)
                             save_json(DB_FILE, trades)
-                            send_telegram(f"✅ *Paper Trade Confirmed:* Bought {qty} units of `{action_symbol}` @ ₹{entry_price:.2f} (SL: ₹{sl_price:.2f}).")
+                            send_telegram(f"✅ Paper Trade Confirmed: Bought {qty} units of {action_symbol} @ ₹{entry_price:.2f} (SL: ₹{sl_price:.2f}).")
                     except Exception as ex:
-                        send_telegram(f"❌ Error executing order for `{action_symbol}`: {ex}")
+                        send_telegram(f"❌ Error executing order for {action_symbol}: {ex}")
 
-        # Clear processed updates from Telegram queue
+        # Clear processed updates from queue
         if last_update_id is not None:
             try:
-                requests.get(f"{url}?offset={last_update_id + 1}", timeout=5)
+                requests.post(url, json={"offset": last_update_id + 1}, timeout=5)
             except Exception:
                 pass
 
     except Exception as e:
         print(f"Telegram polling error: {e}")
-
 
 # ==============================================================================
 # 4. TRADING HOLIDAY & MARKET CALENDAR SENTINEL
