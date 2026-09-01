@@ -100,7 +100,6 @@ def send_telegram(message: str, reply_markup: dict = None):
     payload = {
         "chat_id": str(TELEGRAM_CHAT_ID).strip(),
         "text": message,
-        "parse_mode": "Markdown"
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
