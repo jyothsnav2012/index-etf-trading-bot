@@ -56,7 +56,7 @@ WATCHLIST = {
 }
 
 # ==============================================================================
-# 2. PERSISTENCE & UTILITIES
+# 2. PERSISTENCE & UTILITIES (INCLUDING STATUTORY FRICTION ENGINE)
 # ==============================================================================
 
 def load_json(filepath: str, default_val):
@@ -87,6 +87,27 @@ def safe_float(val) -> float:
     return float(val)
 
 
+def calculate_statutory_friction(entry_price: float, exit_price: float, units: int) -> float:
+    """
+    Estimates standard round-trip statutory costs for delivery ETF trades:
+    - STT/CTT: 0.1% on Buy & Sell turnover
+    - Exchange turnover charges: 0.00297%
+    - Stamp Duty: 0.015% on Buy turnover
+    - SEBI Turnover Charges: ₹10 per crore
+    - GST: 18% on (Exchange charges + SEBI charges)
+    """
+    buy_turnover = entry_price * units
+    sell_turnover = exit_price * units
+    
+    stt = 0.001 * (buy_turnover + sell_turnover)
+    stamp_duty = 0.00015 * buy_turnover
+    exch_charges = 0.0000297 * (buy_turnover + sell_turnover)
+    sebi_charges = 0.000001 * (buy_turnover + sell_turnover)
+    gst = 0.18 * (exch_charges + sebi_charges)
+    
+    return round(stt + stamp_duty + exch_charges + sebi_charges + gst, 2)
+
+
 # ==============================================================================
 # 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
 # ==============================================================================
@@ -99,7 +120,7 @@ def send_telegram(message: str, reply_markup: dict = None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": str(TELEGRAM_CHAT_ID).strip(),
-        "text": message,
+        "text": message
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
@@ -112,6 +133,7 @@ def send_telegram(message: str, reply_markup: dict = None):
             print("✅ Telegram notification sent successfully.")
     except Exception as e:
         print(f"Telegram Dispatch Exception: {e}")
+
 
 def process_telegram_updates():
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -187,7 +209,7 @@ def process_telegram_updates():
                         pos_text = f"• Active Slots: 0/{max_slots} (100% Cash)\n"
                     else:
                         for t in current_open:
-                            pos_text += f"• {t['symbol']}: {t['units']} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
+                            pos_text += f"• {t['symbol']}: {t.get('remaining_units', t['units'])} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
                             
                     status_report = (
                         "📊 SWING ENGINE STATUS\n"
@@ -208,7 +230,7 @@ def process_telegram_updates():
                     if len(parts) > 1:
                         action_symbol = parts[1].upper().replace(".NS", "")
 
-            # --- 3. Unified Trade Execution ---
+            # --- 3. Unified Trade Execution Router ---
             if action_symbol:
                 current_open = [t for t in trades if t.get("status") == "OPEN"]
                 if len(current_open) >= max_slots:
@@ -257,6 +279,7 @@ def process_telegram_updates():
     except Exception as e:
         print(f"Telegram polling error: {e}")
 
+
 # ==============================================================================
 # 4. TRADING HOLIDAY & MARKET CALENDAR SENTINEL
 # ==============================================================================
@@ -285,7 +308,7 @@ def is_market_open() -> bool:
 
 
 # ==============================================================================
-# 5. KITE CONNECT SESSION & LIVE FEED SENTINEL
+# 5. KITE CONNECT SESSION & LIVE FEED SENTINEL (LTP OVERRIDE)
 # ==============================================================================
 
 def initialize_kite_session():
@@ -301,6 +324,28 @@ def initialize_kite_session():
     except Exception as e:
         print(f"Kite Connection Warning: {e}")
         return None
+
+
+def fetch_kite_live_ltp(kite, symbols: list) -> dict:
+    """
+    Fetches real-time NSE exchange LTP directly via Kite Connect API.
+    Returns a mapping of {symbol: ltp_float}.
+    """
+    if not kite:
+        return {}
+    
+    instrument_keys = [f"NSE:{s}" for s in symbols]
+    try:
+        quote_data = kite.ltp(instrument_keys)
+        ltp_map = {}
+        for inst_key, data in quote_data.items():
+            clean_sym = inst_key.replace("NSE:", "")
+            ltp_map[clean_sym] = float(data.get("last_price", 0.0))
+        print(f"✅ Kite Real-Time LTP fetched for: {list(ltp_map.keys())}")
+        return ltp_map
+    except Exception as e:
+        print(f"⚠️ Kite LTP fetch failed, falling back to historical data: {e}")
+        return {}
 
 
 # ==============================================================================
@@ -387,7 +432,7 @@ def manage_positions_and_scan(market_data, regime):
             t["sl"] = entry_price # Trailing stop to cost
             save_json(DB_FILE, trades)
             send_telegram(
-                f"🎯 *LEG 1 PROFIT BOOKED: `{sym}`*\n"
+                f"🎯 LEG 1 PROFIT BOOKED: {sym}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"• Scaled Out: {half_qty} units @ ₹{current_price:.2f} (+3.5%)\n"
                 f"• Remaining: {t['remaining_units']} units running\n"
@@ -403,7 +448,7 @@ def manage_positions_and_scan(market_data, regime):
             t["exit_reason"] = "Leg 2 Trend Exit (20 EMA)"
             save_json(DB_FILE, trades)
             send_telegram(
-                f"🏆 *LEG 2 RUNNER CLOSED: `{sym}`*\n"
+                f"🏆 LEG 2 RUNNER CLOSED: {sym}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"• Exited Remaining: {rem_units} units @ ₹{current_price:.2f}\n"
                 f"• Exit Trigger: Broke below 20 EMA (₹{ema20:.2f})\n"
@@ -422,7 +467,7 @@ def manage_positions_and_scan(market_data, regime):
             save_json(DB_FILE, trades)
             save_json(MEMORY_FILE, memory)
             send_telegram(
-                f"🛑 *STOP-LOSS HIT: `{sym}`*\n"
+                f"🛑 STOP-LOSS HIT: {sym}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"• Exited: {rem_units} units @ ₹{current_price:.2f}\n"
                 f"• Realized Loss: ₹{loss_amount:.2f}\n"
@@ -468,14 +513,14 @@ def manage_positions_and_scan(market_data, regime):
                     }
 
                     signal_card = (
-                        f"⚡ *NEW SWING SIGNAL DETECTED*\n"
+                        f"⚡ NEW SWING SIGNAL DETECTED\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📈 *Symbol:* `{sym}` ({cluster})\n"
-                        f"💰 *Entry:* ₹{close:.2f}\n"
-                        f"🛑 *Stop Loss:* ₹{stop_loss:.2f} (-2.5%)\n"
-                        f"🎯 *Target 1:* ₹{target_1:.2f} (+3.5%)\n"
-                        f"📦 *Position Size:* {qty} units (~₹{(qty * close):,.2f})\n"
-                        f"📊 *RSI 14:* {rsi:.1f}\n"
+                        f"📈 Symbol: {sym} ({cluster})\n"
+                        f"💰 Entry: ₹{close:.2f}\n"
+                        f"🛑 Stop Loss: ₹{stop_loss:.2f} (-2.5%)\n"
+                        f"🎯 Target 1: ₹{target_1:.2f} (+3.5%)\n"
+                        f"📦 Position Size: {qty} units (~₹{(qty * close):,.2f})\n"
+                        f"📊 RSI 14: {rsi:.1f}\n"
                         f"━━━━━━━━━━━━━━━━━━━━"
                     )
 
@@ -491,8 +536,11 @@ def generate_html_dashboard(trades, memory, market_data=None):
     open_trades = [t for t in trades if t.get("status") == "OPEN"]
     closed_trades = [t for t in trades if t.get("status") == "CLOSED"]
     
-    total_unrealized_pnl = 0.0
-    total_realized_pnl = 0.0
+    total_gross_unrealized = 0.0
+    total_net_unrealized = 0.0
+    total_gross_realized = 0.0
+    total_net_realized = 0.0
+    total_friction_paid = 0.0
     wins = 0
 
     # Build Open Positions Rows
@@ -502,17 +550,20 @@ def generate_html_dashboard(trades, memory, market_data=None):
         entry = float(t["entry_price"])
         rem_units = int(t.get("remaining_units", t["units"]))
         
-        # Get Live/Current Price from market_data if available
         ltp = entry
         if market_data and sym in market_data and not market_data[sym].empty:
             ltp = safe_float(market_data[sym]["Close"].iloc[-1])
             
-        unrealized_pnl = (ltp - entry) * rem_units
-        unrealized_pnl_pct = ((ltp - entry) / entry) * 100.0 if entry > 0 else 0.0
-        total_unrealized_pnl += unrealized_pnl
+        gross_pnl = (ltp - entry) * rem_units
+        est_friction = calculate_statutory_friction(entry, ltp, rem_units)
+        net_pnl = gross_pnl - est_friction
+        net_pct = (net_pnl / (entry * rem_units)) * 100.0 if entry > 0 else 0.0
         
-        pnl_color = "#34d399" if unrealized_pnl >= 0 else "#f87171"
-        pnl_sign = "+" if unrealized_pnl >= 0 else ""
+        total_gross_unrealized += gross_pnl
+        total_net_unrealized += net_pnl
+        
+        pnl_color = "#34d399" if net_pnl >= 0 else "#f87171"
+        pnl_sign = "+" if net_pnl >= 0 else ""
         
         target1 = round(entry * (1.0 + BASE_TARGET_PCT), 2)
         leg1_status = "🎯 Booked" if t.get("leg1_done") else f"₹{target1:.2f}"
@@ -527,7 +578,8 @@ def generate_html_dashboard(trades, memory, market_data=None):
             <td>₹{float(t['sl']):.2f}</td>
             <td>{leg1_status}</td>
             <td style="color: {pnl_color}; font-weight: bold;">
-                {pnl_sign}₹{unrealized_pnl:.2f} ({pnl_sign}{unrealized_pnl_pct:.2f}%)
+                {pnl_sign}₹{net_pnl:.2f} <small style="color:#94a3b8;">({pnl_sign}{net_pct:.2f}%)</small>
+                <div style="font-size:10px; color:#64748b; font-weight:normal;">Gross: {pnl_sign}₹{gross_pnl:.2f} | Chgs: ₹{est_friction:.2f}</div>
             </td>
             <td>{t['entry_date']}</td>
         </tr>
@@ -535,19 +587,25 @@ def generate_html_dashboard(trades, memory, market_data=None):
 
     # Build Closed Positions Rows
     closed_rows = ""
-    for t in closed_trades[::-1]: # Latest closed first
+    for t in closed_trades[::-1]:
         entry = float(t["entry_price"])
         exit_p = float(t.get("exit_price", 0.0))
         units = int(t["units"])
-        realized_pnl = (exit_p - entry) * units if exit_p > 0 else 0.0
-        realized_pnl_pct = ((exit_p - entry) / entry) * 100.0 if entry > 0 else 0.0
-        total_realized_pnl += realized_pnl
         
-        if realized_pnl > 0:
+        gross_pnl = (exit_p - entry) * units if exit_p > 0 else 0.0
+        friction = calculate_statutory_friction(entry, exit_p, units)
+        net_pnl = gross_pnl - friction
+        net_pct = (net_pnl / (entry * units)) * 100.0 if entry > 0 else 0.0
+        
+        total_gross_realized += gross_pnl
+        total_net_realized += net_pnl
+        total_friction_paid += friction
+        
+        if net_pnl > 0:
             wins += 1
             
-        pnl_color = "#34d399" if realized_pnl >= 0 else "#f87171"
-        pnl_sign = "+" if realized_pnl >= 0 else ""
+        pnl_color = "#34d399" if net_pnl >= 0 else "#f87171"
+        pnl_sign = "+" if net_pnl >= 0 else ""
 
         closed_rows += f"""
         <tr>
@@ -558,7 +616,8 @@ def generate_html_dashboard(trades, memory, market_data=None):
             <td>{units}</td>
             <td>{t.get('exit_reason', '-')}</td>
             <td style="color: {pnl_color}; font-weight: bold;">
-                {pnl_sign}₹{realized_pnl:.2f} ({pnl_sign}{realized_pnl_pct:.2f}%)
+                {pnl_sign}₹{net_pnl:.2f} <small style="color:#94a3b8;">({pnl_sign}{net_pct:.2f}%)</small>
+                <div style="font-size:10px; color:#64748b; font-weight:normal;">Gross: {pnl_sign}₹{gross_pnl:.2f} | Chgs: ₹{friction:.2f}</div>
             </td>
             <td>{t.get('exit_date', '-')}</td>
         </tr>
@@ -566,14 +625,14 @@ def generate_html_dashboard(trades, memory, market_data=None):
 
     total_closed = len(closed_trades)
     win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
-    net_equity = INITIAL_CAPITAL + total_realized_pnl + total_unrealized_pnl
+    net_equity = INITIAL_CAPITAL + total_net_realized + total_net_unrealized
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETF Swing Trading Terminal & PnL</title>
+    <title>ETF Swing Trading Terminal & Net PnL</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 24px; margin: 0; }}
         .container {{ max-width: 1200px; margin: auto; }}
@@ -596,7 +655,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
         <div class="header">
             <div>
                 <h2 style="margin:0;">⚡ ETF Swing Trading Command Center</h2>
-                <small style="color:#64748b;">Autonomous Multi-Agent Engine</small>
+                <small style="color:#64748b;">Multi-Agent Engine • Post-Tax & Net P&L Tracking</small>
             </div>
             <div style="text-align:right;">
                 <span style="color:#34d399; font-weight:bold;">● ENGINE LIVE</span><br>
@@ -606,15 +665,15 @@ def generate_html_dashboard(trades, memory, market_data=None):
 
         <div class="card-grid">
             <div class="card"><h4>Active Slots</h4><p>{len(open_trades)} / {MAX_ACTIVE_SLOTS}</p></div>
-            <div class="card"><h4>Capital Base</h4><p>₹{INITIAL_CAPITAL:,.2f}</p></div>
             <div class="card"><h4>Net Portfolio Value</h4><p>₹{net_equity:,.2f}</p></div>
-            <div class="card"><h4>Unrealized P&L</h4><p style="color: {'#34d399' if total_unrealized_pnl >= 0 else '#f87171'};">{' ' if total_unrealized_pnl >= 0 else ''}₹{total_unrealized_pnl:,.2f}</p></div>
-            <div class="card"><h4>Realized P&L</h4><p style="color: {'#34d399' if total_realized_pnl >= 0 else '#f87171'};">{' ' if total_realized_pnl >= 0 else ''}₹{total_realized_pnl:,.2f}</p></div>
+            <div class="card"><h4>Net Unrealized P&L</h4><p style="color: {'#34d399' if total_net_unrealized >= 0 else '#f87171'};">{' ' if total_net_unrealized >= 0 else ''}₹{total_net_unrealized:,.2f}</p></div>
+            <div class="card"><h4>Net Realized P&L</h4><p style="color: {'#34d399' if total_net_realized >= 0 else '#f87171'};">{' ' if total_net_realized >= 0 else ''}₹{total_net_realized:,.2f}</p></div>
+            <div class="card"><h4>Est. Statutory Charges</h4><p style="color:#f59e0b;">₹{total_friction_paid:,.2f}</p></div>
             <div class="card"><h4>STCL Shield Pool</h4><p style="color:#a78bfa;">₹{memory.get('stcl_pool', 0.0):,.2f}</p></div>
             <div class="card"><h4>Win Rate</h4><p>{win_rate:.1f}% ({wins}/{total_closed})</p></div>
         </div>
 
-        <div class="section-title">Active Holdings</div>
+        <div class="section-title">Active Holdings (Net of Charges)</div>
         <table>
             <thead>
                 <tr>
@@ -625,7 +684,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
                     <th>Qty</th>
                     <th>SL</th>
                     <th>Target 1</th>
-                    <th>Unrealized P&L</th>
+                    <th>Net P&L (Post-Charges)</th>
                     <th>Entry Date</th>
                 </tr>
             </thead>
@@ -644,7 +703,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
                     <th>Exit</th>
                     <th>Units</th>
                     <th>Reason</th>
-                    <th>Realized P&L</th>
+                    <th>Net Realized P&L</th>
                     <th>Exit Date</th>
                 </tr>
             </thead>
@@ -667,34 +726,72 @@ def run_trading_engine():
     if not is_market_open():
         print(f"Status: Outside trading hours ({now_ist.strftime('%H:%M IST')}).")
     
-    initialize_kite_session()
+    # 1. Establish Kite session
+    kite = initialize_kite_session()
+    
+    # 2. Fetch historical series for indicators (EMA/RSI)
     market_data, regime = fetch_indicators_and_regime()
+
+    # 3. Fetch real-time live quotes directly from Kite
+    all_symbols = list(WATCHLIST.keys())
+    kite_ltps = fetch_kite_live_ltp(kite, all_symbols)
+
+    # Inject live Kite LTP into the latest row of market_data closes
+    for sym, ltp_val in kite_ltps.items():
+        if sym in market_data and not market_data[sym].empty and ltp_val > 0:
+            market_data[sym].iloc[-1, market_data[sym].columns.get_loc("Close")] = ltp_val
+
+    # 4. Evaluate stop-losses, profit targets, and new opportunities
     manage_positions_and_scan(market_data, regime)
     
     trades = load_json(DB_FILE, [])
     memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
     open_trades = [t for t in trades if t.get("status") == "OPEN"]
     
-    # Refresh GitHub Pages Monitor Dashboard
-    generate_html_dashboard(trades, memory,market_data=market_data)
+    # 5. Refresh GitHub Pages Monitor Dashboard with live LTP and friction metrics
+    generate_html_dashboard(trades, memory, market_data=market_data)
     
-    # Send Scan Completion Summary
+    # 6. Format Telegram Summary Report
     pos_summary = ""
     if not open_trades:
         pos_summary = f"• Active Slots: 0/{MAX_ACTIVE_SLOTS} (100% Cash)\n"
     else:
         for t in open_trades:
-            pos_summary += f"• `{t['symbol']}`: {t.get('remaining_units', t['units'])} units @ ₹{t['entry_price']} (SL: ₹{t['sl']})\n"
+            sym = t["symbol"]
+            entry = float(t["entry_price"])
+            units = int(t.get("remaining_units", t["units"]))
+            sl = float(t["sl"])
+            target = round(entry * (1.0 + BASE_TARGET_PCT), 2)
+            
+            # Prioritize Kite live quote, fall back to safe_float close
+            ltp = kite_ltps.get(sym)
+            if not ltp and market_data and sym in market_data and not market_data[sym].empty:
+                ltp = safe_float(market_data[sym]["Close"].iloc[-1])
+            ltp = round(float(ltp or entry), 2)
+                
+            gross_pnl = (ltp - entry) * units
+            friction = calculate_statutory_friction(entry, ltp, units)
+            net_pnl = gross_pnl - friction
+            net_pct = (net_pnl / (entry * units)) * 100.0 if entry > 0 else 0.0
+            pnl_sign = "+" if net_pnl >= 0 else ""
+            
+            pos_summary += (
+                f"• {sym}: {units} units\n"
+                f" Entry: ₹{entry:.2f} | LTP: ₹{ltp:.2f}\n"
+                f" 🎯 Target: ₹{target:.2f} | 🛑 SL: ₹{sl:.2f}\n"
+                f" Net P&L: {pnl_sign}₹{net_pnl:.2f} ({pnl_sign}{net_pct:.2f}%)\n"
+                f" (Gross: {pnl_sign}₹{gross_pnl:.2f} | Est. Taxes/Chgs: ₹{friction:.2f})\n\n"
+            )
             
     summary_msg = (
-        "📊 *SWING ENGINE STATUS*\n"
+        "📊 SWING ENGINE STATUS\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🟢 *Status:* Scan Complete\n"
-        f"⏰ *Server Time:* {now_ist.strftime('%H:%M:%S IST')}\n"
-        f"💰 *Capital Base:* ₹{INITIAL_CAPITAL:,.2f}\n"
-        f"🛡️ *Tax Shield:* ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
-        f"*Open Positions ({len(open_trades)}/{MAX_ACTIVE_SLOTS}):*\n"
-        f"{pos_summary}"
+        "🟢 Status: Scan Complete\n"
+        f"⏰ Server Time: {now_ist.strftime('%H:%M:%S IST')}\n"
+        f"💰 Capital Base: ₹{INITIAL_CAPITAL:,.2f}\n"
+        f"🛡️ Tax Shield: ₹{memory.get('stcl_pool', 0.0):,.2f}\n\n"
+        f"Open Positions ({len(open_trades)}/{MAX_ACTIVE_SLOTS}):\n"
+        f"{pos_summary.strip()}\n"
         "━━━━━━━━━━━━━━━━━━━━"
     )
     send_telegram(summary_msg)
