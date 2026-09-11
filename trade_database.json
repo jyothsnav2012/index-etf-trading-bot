@@ -6,8 +6,11 @@
         "remaining_units": 137,
         "sl": 236.1,
         "entry_date": "2026-08-31",
-        "status": "OPEN",
-        "leg1_done": false
+        "status": "CLOSED",
+        "leg1_done": false,
+        "exit_price": 235.99000549316406,
+        "exit_date": "2026-09-11",
+        "exit_reason": "Stop-Loss Hit"
     },
     {
         "symbol": "PHARMABEES",
@@ -29,10 +32,10 @@
         "remaining_units": 55,
         "sl": 583.43,
         "entry_date": "2026-09-01",
-        "status": "OPEN",
+        "status": "CLOSED",
         "leg1_done": false,
-        "exit_price": null,
-        "exit_date": null,
-        "exit_reason": null
+        "exit_price": 583.2000122070312,
+        "exit_date": "2026-09-11",
+        "exit_reason": "Stop-Loss Hit"
     }
 ]
