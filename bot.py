@@ -385,28 +385,82 @@ def is_market_open() -> bool:
 # ==============================================================================
 
 def initialize_kite_session():
+    """
+    Automates Zerodha Kite headless login:
+    1. Submits user ID & password.
+    2. Generates TOTP code using KITE_TOTP_SECRET and verifies 2FA.
+    3. Retrieves request_token from login redirect.
+    4. Exchanges request_token with KITE_API_SECRET for an active access_token.
+    """
     if not (KITE_API_KEY and KITE_API_SECRET and KITE_USER_ID and KITE_PASSWORD and KITE_TOTP_SECRET):
+        print("⚠️ Missing Kite Connect credentials. Running in offline/fallback mode.")
         return None
+
     try:
+        session = requests.Session()
         kite = KiteConnect(api_key=KITE_API_KEY)
+
+        # 1. Login with User ID and Password
+        login_url = "https://kite.zerodha.com/api/login"
+        login_payload = {
+            "user_id": KITE_USER_ID,
+            "password": KITE_PASSWORD
+        }
+        res = session.post(login_url, data=login_payload, timeout=10).json()
+        if res.get("status") != "success":
+            print(f"⚠️ Kite Step 1 failed: {res.get('message')}")
+            return None
         print("✅ Step 1: User ID and Password verified.")
-        totp = pyotp.TOTP(KITE_TOTP_SECRET).now()
+
+        request_id = res["data"]["request_id"]
+
+        # 2. Complete 2FA using TOTP Secret
+        twofa_url = "https://kite.zerodha.com/api/twofa"
+        totp_code = pyotp.TOTP(KITE_TOTP_SECRET).now()
+        twofa_payload = {
+            "user_id": KITE_USER_ID,
+            "request_id": request_id,
+            "twofa_value": totp_code,
+            "skip_session": ""
+        }
+        twofa_res = session.post(twofa_url, data=twofa_payload, timeout=10).json()
+        if twofa_res.get("status") != "success":
+            print(f"⚠️ Kite Step 2 (2FA) failed: {twofa_res.get('message')}")
+            return None
         print("✅ Step 2: 2FA TOTP verified.")
+
+        # 3. Retrieve request_token from redirect URL
+        auth_url = f"https://kite.zerodha.com/connect/login?api_key={KITE_API_KEY}&v=3"
+        resp = session.get(auth_url, allow_redirects=False, timeout=10)
+        redirect_url = resp.headers.get("Location", "")
+
+        if "request_token=" not in redirect_url:
+            print("⚠️ Failed to capture request_token from Kite redirect.")
+            return None
+
+        request_token = redirect_url.split("request_token=")[1].split("&")[0]
+
+        # 4. Generate and set daily access_token
+        session_data = kite.generate_session(request_token, api_secret=KITE_API_SECRET)
+        access_token = session_data["access_token"]
+        kite.set_access_token(access_token)
+
         print("✅ Step 3: Session established. Connected to Kite live feed.")
         return kite
+
     except Exception as e:
-        print(f"Kite Connection Warning: {e}")
+        print(f"⚠️ Kite automated authentication failed: {e}")
         return None
 
 
 def fetch_kite_live_ltp(kite, symbols: list) -> dict:
     """
     Fetches real-time NSE exchange LTP directly via Kite Connect API.
-    Returns a mapping of {symbol: ltp_float}.
+    Returns a dictionary mapping: {clean_symbol: float_ltp}.
     """
     if not kite:
         return {}
-    
+
     instrument_keys = [f"NSE:{s}" for s in symbols]
     try:
         quote_data = kite.ltp(instrument_keys)
