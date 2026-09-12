@@ -384,89 +384,24 @@ def is_market_open() -> bool:
 # 5. KITE CONNECT SESSION & LIVE FEED SENTINEL (LTP OVERRIDE)
 # ==============================================================================
 
+KITE_ACCESS_TOKEN = os.getenv("KITE_ACCESS_TOKEN")
+
 def initialize_kite_session():
     """
-    Automates Zerodha Kite headless login:
-    1. Submits user ID & password.
-    2. Generates TOTP code using KITE_TOTP_SECRET and verifies 2FA.
-    3. Follows authorization redirect to capture request_token.
-    4. Exchanges request_token with KITE_API_SECRET for an active access_token.
+    Initializes Kite session using KITE_ACCESS_TOKEN if provided.
+    Falls back gracefully if token is absent or expired.
     """
-    if not (KITE_API_KEY and KITE_API_SECRET and KITE_USER_ID and KITE_PASSWORD and KITE_TOTP_SECRET):
-        print("⚠️ Missing Kite Connect credentials. Running in offline/fallback mode.")
+    if not (KITE_API_KEY and KITE_ACCESS_TOKEN):
         return None
-
     try:
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-        kite = KiteConnect(api_key=KITE_API_KEY)
-
-        # 1. Login with User ID and Password
-        login_url = "https://kite.zerodha.com/api/login"
-        login_payload = {
-            "user_id": KITE_USER_ID.strip(),
-            "password": KITE_PASSWORD.strip()
-        }
-        res = session.post(login_url, data=login_payload, timeout=10).json()
-        if res.get("status") != "success":
-            print(f"⚠️ Kite Step 1 failed: {res.get('message')}")
-            return None
-        print("✅ Step 1: User ID and Password verified.")
-
-        request_id = res["data"]["request_id"]
-
-        # 2. Complete 2FA using TOTP Secret
-        twofa_url = "https://kite.zerodha.com/api/twofa"
-        totp_code = pyotp.TOTP(KITE_TOTP_SECRET.strip()).now()
-        twofa_payload = {
-            "user_id": KITE_USER_ID.strip(),
-            "request_id": request_id,
-            "twofa_value": totp_code,
-            "skip_session": ""
-        }
-        twofa_res = session.post(twofa_url, data=twofa_payload, timeout=10).json()
-        if twofa_res.get("status") != "success":
-            print(f"⚠️ Kite Step 2 (2FA) failed: {twofa_res.get('message')}")
-            return None
-        print("✅ Step 2: 2FA TOTP verified.")
-
-        # 3. Retrieve request_token from redirect chain
-        auth_url = f"https://kite.zerodha.com/connect/login?api_key={KITE_API_KEY.strip()}&v=3"
-        request_token = None
-
-        try:
-            # allow_redirects=True follows any intermediate Zerodha hops to your Redirect URL
-            resp = session.get(auth_url, allow_redirects=True, timeout=10)
-            
-            # Check redirect history URLs and final landing URL
-            all_urls = [r.headers.get("Location", "") for r in resp.history] + [resp.url]
-            for u in all_urls:
-                if "request_token=" in u:
-                    request_token = u.split("request_token=")[1].split("&")[0]
-                    break
-        except requests.exceptions.ConnectionError as ce:
-            # If your app redirect is http://127.0.0.1 or localhost, requests raises ConnectionError
-            # when it reaches that URL, but the request_token is already present in the failed URL.
-            failed_url = str(ce)
-            if "request_token=" in failed_url:
-                request_token = failed_url.split("request_token=")[1].split("&")[0]
-
-        if not request_token:
-            print("⚠️ Failed to capture request_token from Kite redirect chain.")
-            return None
-
-        # 4. Generate and set daily access_token
-        session_data = kite.generate_session(request_token, api_secret=KITE_API_SECRET.strip())
-        access_token = session_data["access_token"]
-        kite.set_access_token(access_token)
-
-        print("✅ Step 3: Session established. Connected to Kite live feed.")
+        kite = KiteConnect(api_key=KITE_API_KEY.strip())
+        kite.set_access_token(KITE_ACCESS_TOKEN.strip())
+        # Quick validation check
+        kite.profile()
+        print("✅ Kite session established with active access token.")
         return kite
-
     except Exception as e:
-        print(f"⚠️ Kite automated authentication failed: {e}")
+        print(f"⚠️ Kite session offline ({e}). Using historical data fallback.")
         return None
 
 
@@ -490,9 +425,8 @@ def fetch_kite_live_ltp(kite, symbols: list) -> dict:
         print(f"✅ Kite Real-Time LTP fetched for: {list(ltp_map.keys())}")
         return ltp_map
     except Exception as e:
-        print(f"⚠️ Kite LTP fetch failed, falling back to historical data: {e}")
+        print(f"⚠️ Kite LTP fetch failed, using market feed: {e}")
         return {}
-
 
 
 # ==============================================================================
