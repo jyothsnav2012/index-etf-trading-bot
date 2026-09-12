@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import math
 import requests
 import pyotp
 import pandas as pd
@@ -56,7 +57,7 @@ WATCHLIST = {
 }
 
 # ==============================================================================
-# 2. PERSISTENCE & UTILITIES (INCLUDING STATUTORY FRICTION ENGINE)
+# 2. PERSISTENCE & UTILITIES (INCLUDING STATUTORY FRICTION & ANALYTICS)
 # ==============================================================================
 
 def load_json(filepath: str, default_val):
@@ -78,13 +79,20 @@ def save_json(filepath: str, data):
         print(f"Error saving {filepath}: {e}")
 
 
-def safe_float(val) -> float:
-    """Extracts a scalar float cleanly regardless of multi-index pandas structure."""
-    if hasattr(val, "iloc"):
-        return float(val.iloc[0])
-    if hasattr(val, "item"):
-        return float(val.item())
-    return float(val)
+def safe_float(val, default: float = 0.0) -> float:
+    """Extracts a scalar float cleanly and eliminates NaN / invalid series values."""
+    if val is None:
+        return default
+    try:
+        if hasattr(val, "iloc"):
+            v = float(val.iloc[0])
+        elif hasattr(val, "item"):
+            v = float(val.item())
+        else:
+            v = float(val)
+        return default if math.isnan(v) else v
+    except Exception:
+        return default
 
 
 def calculate_statutory_friction(entry_price: float, exit_price: float, units: int) -> float:
@@ -107,10 +115,11 @@ def calculate_statutory_friction(entry_price: float, exit_price: float, units: i
     
     return round(stt + stamp_duty + exch_charges + sebi_charges + gst, 2)
 
+
 def compute_strategy_analytics(closed_trades: list) -> dict:
     """
-    Computes rigorous systematic trading metrics over completed trades.
-    Extracts win rate, profit factor, payoff ratio, and net statistical expectancy.
+    Computes systematic trading metrics over completed trades:
+    Win Rate, Profit Factor, Payoff Ratio, and Net Expectancy.
     """
     if not closed_trades:
         return {
@@ -154,7 +163,6 @@ def compute_strategy_analytics(closed_trades: list) -> dict:
     avg_loss = (tot_loss / losses) if losses > 0 else 0.0
     payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else 0.0
 
-    # Net Expectancy per trade: (Win% * Avg Win) - (Loss% * Avg Loss)
     p_win = wins / total_trades if total_trades > 0 else 0.0
     p_loss = losses / total_trades if total_trades > 0 else 0.0
     net_expectancy = (p_win * avg_win) - (p_loss * avg_loss)
@@ -172,6 +180,7 @@ def compute_strategy_analytics(closed_trades: list) -> dict:
         "payoff_ratio": round(payoff_ratio, 2),
         "net_expectancy": round(net_expectancy, 2)
     }
+
 
 # ==============================================================================
 # 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
@@ -233,7 +242,7 @@ def process_telegram_updates():
             qty = None
             sl_price = None
             
-            # --- 1. Handle Inline Button Callback (BUY / PASS) ---
+            # --- Inline Button Callbacks ---
             if "callback_query" in item:
                 cb = item["callback_query"]
                 cb_id = cb.get("id")
@@ -262,7 +271,7 @@ def process_telegram_updates():
                     send_telegram(f"⏭️ Signal for {sym} passed.")
                     continue
 
-            # --- 2. Handle Text Commands (/status, /dashboard, /buy <symbol>) ---
+            # --- Text Commands ---
             elif "message" in item:
                 msg = item["message"]
                 text = msg.get("text", "").strip()
@@ -295,7 +304,7 @@ def process_telegram_updates():
                     if len(parts) > 1:
                         action_symbol = parts[1].upper().replace(".NS", "")
 
-            # --- 3. Unified Trade Execution Router ---
+            # --- Order Router ---
             if action_symbol:
                 current_open = [t for t in trades if t.get("status") == "OPEN"]
                 if len(current_open) >= max_slots:
@@ -309,12 +318,12 @@ def process_telegram_updates():
                             df = yf.download(ticker_key, period="5d", interval="1d", progress=False)
                             if not df.empty:
                                 close_val = df['Close'].iloc[-1]
-                                entry_price = round(safe_float(close_val), 2)
+                                entry_price = round(safe_float(close_val, default=0.0), 2)
                                 slot_cap = INITIAL_CAPITAL / max_slots
-                                qty = int(slot_cap / entry_price)
+                                qty = int(slot_cap / entry_price) if entry_price > 0 else 0
                                 sl_price = round(entry_price * (1.0 - STOP_LOSS_PCT), 2)
 
-                        if entry_price and qty and sl_price:
+                        if entry_price and qty and sl_price and entry_price > 0:
                             new_trade = {
                                 "symbol": action_symbol,
                                 "entry_price": entry_price,
@@ -334,7 +343,6 @@ def process_telegram_updates():
                     except Exception as ex:
                         send_telegram(f"❌ Error executing order for {action_symbol}: {ex}")
 
-        # Clear processed updates from queue
         if last_update_id is not None:
             try:
                 requests.post(url, json={"offset": last_update_id + 1}, timeout=5)
@@ -405,7 +413,9 @@ def fetch_kite_live_ltp(kite, symbols: list) -> dict:
         ltp_map = {}
         for inst_key, data in quote_data.items():
             clean_sym = inst_key.replace("NSE:", "")
-            ltp_map[clean_sym] = float(data.get("last_price", 0.0))
+            price = safe_float(data.get("last_price", 0.0), default=0.0)
+            if price > 0:
+                ltp_map[clean_sym] = price
         print(f"✅ Kite Real-Time LTP fetched for: {list(ltp_map.keys())}")
         return ltp_map
     except Exception as e:
@@ -474,27 +484,31 @@ def manage_positions_and_scan(market_data, regime):
     active_trades = [t for t in trades if t.get("status") == "OPEN"]
     active_clusters = [WATCHLIST[t["symbol"]]["cluster"] for t in active_trades if t["symbol"] in WATCHLIST]
     
-    # --- A. Active Position Management (Profit Targets, Trailing SL, Stops) ---
+    # --- A. Active Position Management ---
     for t in active_trades:
         sym = t["symbol"]
         df = market_data.get(sym)
-        if df is None or df.empty:
-            continue
-            
-        current_price = safe_float(df["Close"].iloc[-1])
-        ema20 = safe_float(df["ema20"].iloc[-1])
         entry_price = float(t["entry_price"])
         units = int(t["units"])
         rem_units = int(t.get("remaining_units", units))
         sl = float(t["sl"])
         target = round(entry_price * (1.0 + BASE_TARGET_PCT), 2)
+
+        current_price = entry_price
+        ema20 = entry_price
+        if df is not None and not df.empty:
+            current_price = safe_float(df["Close"].iloc[-1], default=entry_price)
+            ema20 = safe_float(df["ema20"].iloc[-1], default=entry_price)
+
+        if current_price <= 0:
+            current_price = entry_price
         
-        # Leg 1: +3.5% Target Hit (Scale out 50% and move stop to Breakeven)
+        # Leg 1: +3.5% Target Hit
         if not t.get("leg1_done", False) and current_price >= target:
             half_qty = units // 2
             t["remaining_units"] = units - half_qty
             t["leg1_done"] = True
-            t["sl"] = entry_price # Trailing stop to cost
+            t["sl"] = entry_price
             save_json(DB_FILE, trades)
             send_telegram(
                 f"🎯 LEG 1 PROFIT BOOKED: {sym}\n"
@@ -505,7 +519,7 @@ def manage_positions_and_scan(market_data, regime):
                 f"━━━━━━━━━━━━━━━━━━━━"
             )
 
-        # Leg 2 Runner Exit (Trailing below 20 EMA after Leg 1 is achieved)
+        # Leg 2 Runner Exit
         elif t.get("leg1_done", False) and current_price < ema20:
             t["status"] = "CLOSED"
             t["exit_price"] = current_price
@@ -527,7 +541,6 @@ def manage_positions_and_scan(market_data, regime):
             t["exit_date"] = datetime.now(IST).strftime("%Y-%m-%d")
             t["exit_reason"] = "Stop-Loss Hit"
             loss_amount = (entry_price - current_price) * rem_units
-            # Credit STCL tax shield pool
             memory["stcl_pool"] = memory.get("stcl_pool", 0.0) + (loss_amount * STCL_SET_ASIDE_PCT)
             save_json(DB_FILE, trades)
             save_json(MEMORY_FILE, memory)
@@ -540,7 +553,7 @@ def manage_positions_and_scan(market_data, regime):
                 f"━━━━━━━━━━━━━━━━━━━━"
             )
 
-    # --- B. Opportunity Scanner (Alpha Signals) ---
+    # --- B. Opportunity Scanner ---
     current_open_trades = [t for t in trades if t.get("status") == "OPEN"]
     available_slots = MAX_ACTIVE_SLOTS - len(current_open_trades)
     
@@ -555,12 +568,14 @@ def manage_positions_and_scan(market_data, regime):
             if cluster in active_clusters:
                 continue
                 
-            close = safe_float(df["Close"].iloc[-1])
-            ema20 = safe_float(df["ema20"].iloc[-1])
-            ema50 = safe_float(df["ema50"].iloc[-1])
-            rsi = safe_float(df["rsi"].iloc[-1])
+            close = safe_float(df["Close"].iloc[-1], default=0.0)
+            ema20 = safe_float(df["ema20"].iloc[-1], default=0.0)
+            ema50 = safe_float(df["ema50"].iloc[-1], default=0.0)
+            rsi = safe_float(df["rsi"].iloc[-1], default=0.0)
             
-            # Triple Confirmation Entry Setup
+            if close <= 0 or ema20 <= 0 or ema50 <= 0:
+                continue
+            
             if (close > ema50) and (abs(close - ema20) / close <= 0.015) and (40.0 <= rsi <= 60.0):
                 slot_capital = (INITIAL_CAPITAL / MAX_ACTIVE_SLOTS) + (memory.get("stcl_pool", 0.0) / MAX_ACTIVE_SLOTS)
                 qty = int(slot_capital // close)
@@ -609,7 +624,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
     total_net_realized = 0.0
     total_friction_paid = 0.0
 
-    # Open Positions
+    # Build Open Positions Rows
     open_rows = ""
     for t in open_trades:
         sym = t["symbol"]
@@ -618,7 +633,9 @@ def generate_html_dashboard(trades, memory, market_data=None):
         
         ltp = entry
         if market_data and sym in market_data and not market_data[sym].empty:
-            ltp = safe_float(market_data[sym]["Close"].iloc[-1])
+            fetched_ltp = safe_float(market_data[sym]["Close"].iloc[-1], default=entry)
+            if fetched_ltp > 0:
+                ltp = fetched_ltp
             
         gross_pnl = (ltp - entry) * rem_units
         est_friction = calculate_statutory_friction(entry, ltp, rem_units)
@@ -651,7 +668,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
         </tr>
         """
 
-    # Closed Positions
+    # Build Closed Positions Rows
     closed_rows = ""
     for t in closed_trades[::-1]:
         entry = float(t["entry_price"])
@@ -725,7 +742,6 @@ def generate_html_dashboard(trades, memory, market_data=None):
             </div>
         </div>
 
-        <!-- Portfolio Capital Metrics -->
         <div class="card-grid">
             <div class="card"><h4>Active Slots</h4><p>{len(open_trades)} / {MAX_ACTIVE_SLOTS}</p></div>
             <div class="card"><h4>Net Portfolio Value</h4><p>₹{net_equity:,.2f}</p></div>
@@ -735,7 +751,6 @@ def generate_html_dashboard(trades, memory, market_data=None):
             <div class="card"><h4>STCL Shield Pool</h4><p style="color:#a78bfa;">₹{memory.get('stcl_pool', 0.0):,.2f}</p></div>
         </div>
 
-        <!-- Quantitative Statistical Health -->
         <div class="section-title">Strategy Health & Expectancy Metrics (Closed Trades)</div>
         <div class="card-grid">
             <div class="card"><h4>Win Rate</h4><p>{analytics['win_rate']}% <span style="font-size:13px; color:#94a3b8;">({analytics['wins']}/{analytics['total_trades']})</span></p></div>
@@ -802,17 +817,17 @@ def run_trading_engine():
     if not is_market_open():
         print(f"Status: Outside trading hours ({now_ist.strftime('%H:%M IST')}).")
     
-    # 1. Establish Kite session
+    # 1. Initialize Kite Session safely
     kite = initialize_kite_session()
     
-    # 2. Fetch historical series for indicators (EMA/RSI)
+    # 2. Fetch historical series for indicators
     market_data, regime = fetch_indicators_and_regime()
 
-    # 3. Fetch real-time live quotes directly from Kite
+    # 3. Attempt live exchange LTP fetch via Kite
     all_symbols = list(WATCHLIST.keys())
     kite_ltps = fetch_kite_live_ltp(kite, all_symbols)
 
-    # Inject live Kite LTP into the latest row of market_data closes
+    # Inject live quotes into market data series
     for sym, ltp_val in kite_ltps.items():
         if sym in market_data and not market_data[sym].empty and ltp_val > 0:
             market_data[sym].iloc[-1, market_data[sym].columns.get_loc("Close")] = ltp_val
@@ -824,10 +839,10 @@ def run_trading_engine():
     memory = load_json(MEMORY_FILE, {"stcl_pool": 0.0, "cooldowns": {}, "portfolio_peak": INITIAL_CAPITAL})
     open_trades = [t for t in trades if t.get("status") == "OPEN"]
     
-    # 5. Refresh GitHub Pages Monitor Dashboard with live LTP and friction metrics
+    # 5. Refresh GitHub Pages Monitor Dashboard
     generate_html_dashboard(trades, memory, market_data=market_data)
     
-    # 6. Format Telegram Summary Report
+    # 6. Format Telegram Summary Report with robust NaN fallback
     pos_summary = ""
     if not open_trades:
         pos_summary = f"• Active Slots: 0/{MAX_ACTIVE_SLOTS} (100% Cash)\n"
@@ -839,11 +854,15 @@ def run_trading_engine():
             sl = float(t["sl"])
             target = round(entry * (1.0 + BASE_TARGET_PCT), 2)
             
-            # Prioritize Kite live quote, fall back to safe_float close
+            # Prioritize Kite live quote, fall back to safe yfinance close, then entry
             ltp = kite_ltps.get(sym)
-            if not ltp and market_data and sym in market_data and not market_data[sym].empty:
-                ltp = safe_float(market_data[sym]["Close"].iloc[-1])
-            ltp = round(float(ltp or entry), 2)
+            if (ltp is None or math.isnan(ltp) or ltp <= 0) and market_data and sym in market_data and not market_data[sym].empty:
+                ltp = safe_float(market_data[sym]["Close"].iloc[-1], default=entry)
+            
+            if ltp is None or math.isnan(ltp) or ltp <= 0:
+                ltp = entry
+
+            ltp = round(float(ltp), 2)
                 
             gross_pnl = (ltp - entry) * units
             friction = calculate_statutory_friction(entry, ltp, units)
@@ -878,8 +897,5 @@ def run_trading_engine():
 # ==============================================================================
 
 if __name__ == "__main__":
-    # 1. First process pending Telegram interactions (/buy, /status, button clicks)
     process_telegram_updates()
-    
-    # 2. Execute multi-agent data pipeline, exits, and opportunity scanner
     run_trading_engine()
