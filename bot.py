@@ -389,7 +389,7 @@ def initialize_kite_session():
     Automates Zerodha Kite headless login:
     1. Submits user ID & password.
     2. Generates TOTP code using KITE_TOTP_SECRET and verifies 2FA.
-    3. Retrieves request_token from login redirect.
+    3. Follows authorization redirect to capture request_token.
     4. Exchanges request_token with KITE_API_SECRET for an active access_token.
     """
     if not (KITE_API_KEY and KITE_API_SECRET and KITE_USER_ID and KITE_PASSWORD and KITE_TOTP_SECRET):
@@ -398,13 +398,16 @@ def initialize_kite_session():
 
     try:
         session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
         kite = KiteConnect(api_key=KITE_API_KEY)
 
         # 1. Login with User ID and Password
         login_url = "https://kite.zerodha.com/api/login"
         login_payload = {
-            "user_id": KITE_USER_ID,
-            "password": KITE_PASSWORD
+            "user_id": KITE_USER_ID.strip(),
+            "password": KITE_PASSWORD.strip()
         }
         res = session.post(login_url, data=login_payload, timeout=10).json()
         if res.get("status") != "success":
@@ -416,9 +419,9 @@ def initialize_kite_session():
 
         # 2. Complete 2FA using TOTP Secret
         twofa_url = "https://kite.zerodha.com/api/twofa"
-        totp_code = pyotp.TOTP(KITE_TOTP_SECRET).now()
+        totp_code = pyotp.TOTP(KITE_TOTP_SECRET.strip()).now()
         twofa_payload = {
-            "user_id": KITE_USER_ID,
+            "user_id": KITE_USER_ID.strip(),
             "request_id": request_id,
             "twofa_value": totp_code,
             "skip_session": ""
@@ -429,19 +432,33 @@ def initialize_kite_session():
             return None
         print("✅ Step 2: 2FA TOTP verified.")
 
-        # 3. Retrieve request_token from redirect URL
-        auth_url = f"https://kite.zerodha.com/connect/login?api_key={KITE_API_KEY}&v=3"
-        resp = session.get(auth_url, allow_redirects=False, timeout=10)
-        redirect_url = resp.headers.get("Location", "")
+        # 3. Retrieve request_token from redirect chain
+        auth_url = f"https://kite.zerodha.com/connect/login?api_key={KITE_API_KEY.strip()}&v=3"
+        request_token = None
 
-        if "request_token=" not in redirect_url:
-            print("⚠️ Failed to capture request_token from Kite redirect.")
+        try:
+            # allow_redirects=True follows any intermediate Zerodha hops to your Redirect URL
+            resp = session.get(auth_url, allow_redirects=True, timeout=10)
+            
+            # Check redirect history URLs and final landing URL
+            all_urls = [r.headers.get("Location", "") for r in resp.history] + [resp.url]
+            for u in all_urls:
+                if "request_token=" in u:
+                    request_token = u.split("request_token=")[1].split("&")[0]
+                    break
+        except requests.exceptions.ConnectionError as ce:
+            # If your app redirect is http://127.0.0.1 or localhost, requests raises ConnectionError
+            # when it reaches that URL, but the request_token is already present in the failed URL.
+            failed_url = str(ce)
+            if "request_token=" in failed_url:
+                request_token = failed_url.split("request_token=")[1].split("&")[0]
+
+        if not request_token:
+            print("⚠️ Failed to capture request_token from Kite redirect chain.")
             return None
 
-        request_token = redirect_url.split("request_token=")[1].split("&")[0]
-
         # 4. Generate and set daily access_token
-        session_data = kite.generate_session(request_token, api_secret=KITE_API_SECRET)
+        session_data = kite.generate_session(request_token, api_secret=KITE_API_SECRET.strip())
         access_token = session_data["access_token"]
         kite.set_access_token(access_token)
 
@@ -475,6 +492,7 @@ def fetch_kite_live_ltp(kite, symbols: list) -> dict:
     except Exception as e:
         print(f"⚠️ Kite LTP fetch failed, falling back to historical data: {e}")
         return {}
+
 
 
 # ==============================================================================
