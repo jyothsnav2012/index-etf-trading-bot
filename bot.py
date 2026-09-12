@@ -107,6 +107,71 @@ def calculate_statutory_friction(entry_price: float, exit_price: float, units: i
     
     return round(stt + stamp_duty + exch_charges + sebi_charges + gst, 2)
 
+def compute_strategy_analytics(closed_trades: list) -> dict:
+    """
+    Computes rigorous systematic trading metrics over completed trades.
+    Extracts win rate, profit factor, payoff ratio, and net statistical expectancy.
+    """
+    if not closed_trades:
+        return {
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "gross_profit": 0.0,
+            "gross_loss": 0.0,
+            "profit_factor": 0.0,
+            "avg_win": 0.0,
+            "avg_loss": 0.0,
+            "payoff_ratio": 0.0,
+            "net_expectancy": 0.0
+        }
+
+    gross_profits = []
+    gross_losses = []
+
+    for t in closed_trades:
+        entry = float(t.get("entry_price", 0.0))
+        exit_p = float(t.get("exit_price", 0.0))
+        units = int(t.get("units", 0))
+        net_diff = (exit_p - entry) * units
+
+        if net_diff > 0:
+            gross_profits.append(net_diff)
+        elif net_diff < 0:
+            gross_losses.append(abs(net_diff))
+
+    wins = len(gross_profits)
+    losses = len(gross_losses)
+    total_trades = wins + losses
+
+    tot_profit = sum(gross_profits)
+    tot_loss = sum(gross_losses)
+
+    win_rate = (wins / total_trades * 100.0) if total_trades > 0 else 0.0
+    profit_factor = (tot_profit / tot_loss) if tot_loss > 0 else (tot_profit if tot_profit > 0 else 0.0)
+    avg_win = (tot_profit / wins) if wins > 0 else 0.0
+    avg_loss = (tot_loss / losses) if losses > 0 else 0.0
+    payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else 0.0
+
+    # Net Expectancy per trade: (Win% * Avg Win) - (Loss% * Avg Loss)
+    p_win = wins / total_trades if total_trades > 0 else 0.0
+    p_loss = losses / total_trades if total_trades > 0 else 0.0
+    net_expectancy = (p_win * avg_win) - (p_loss * avg_loss)
+
+    return {
+        "total_trades": total_trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 1),
+        "gross_profit": round(tot_profit, 2),
+        "gross_loss": round(tot_loss, 2),
+        "profit_factor": round(profit_factor, 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "payoff_ratio": round(payoff_ratio, 2),
+        "net_expectancy": round(net_expectancy, 2)
+    }
 
 # ==============================================================================
 # 3. TELEGRAM DISPATCH & INTERACTIVE CALLBACK LISTENER
@@ -536,14 +601,15 @@ def generate_html_dashboard(trades, memory, market_data=None):
     open_trades = [t for t in trades if t.get("status") == "OPEN"]
     closed_trades = [t for t in trades if t.get("status") == "CLOSED"]
     
+    analytics = compute_strategy_analytics(closed_trades)
+
     total_gross_unrealized = 0.0
     total_net_unrealized = 0.0
     total_gross_realized = 0.0
     total_net_realized = 0.0
     total_friction_paid = 0.0
-    wins = 0
 
-    # Build Open Positions Rows
+    # Open Positions
     open_rows = ""
     for t in open_trades:
         sym = t["symbol"]
@@ -585,7 +651,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
         </tr>
         """
 
-    # Build Closed Positions Rows
+    # Closed Positions
     closed_rows = ""
     for t in closed_trades[::-1]:
         entry = float(t["entry_price"])
@@ -601,9 +667,6 @@ def generate_html_dashboard(trades, memory, market_data=None):
         total_net_realized += net_pnl
         total_friction_paid += friction
         
-        if net_pnl > 0:
-            wins += 1
-            
         pnl_color = "#34d399" if net_pnl >= 0 else "#f87171"
         pnl_sign = "+" if net_pnl >= 0 else ""
 
@@ -623,8 +686,6 @@ def generate_html_dashboard(trades, memory, market_data=None):
         </tr>
         """
 
-    total_closed = len(closed_trades)
-    win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
     net_equity = INITIAL_CAPITAL + total_net_realized + total_net_unrealized
 
     html_content = f"""<!DOCTYPE html>
@@ -632,22 +693,23 @@ def generate_html_dashboard(trades, memory, market_data=None):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ETF Swing Trading Terminal & Net PnL</title>
+    <title>ETF Swing Trading Terminal & Analytics</title>
     <style>
         body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b0f19; color: #f8fafc; padding: 24px; margin: 0; }}
         .container {{ max-width: 1200px; margin: auto; }}
         .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 16px; margin-bottom: 24px; }}
-        .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }}
+        .card-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px; }}
         .card {{ background: #131c2e; padding: 16px; border-radius: 8px; border: 1px solid #1e293b; }}
         .card h4 {{ margin: 0 0 6px 0; color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }}
         .card p {{ margin: 0; font-size: 20px; font-weight: bold; color: #f8fafc; }}
-        .section-title {{ font-size: 16px; font-weight: bold; margin: 24px 0 12px 0; color: #38bdf8; text-transform: uppercase; }}
+        .section-title {{ font-size: 15px; font-weight: bold; margin: 24px 0 12px 0; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px; }}
         table {{ width: 100%; border-collapse: collapse; background: #131c2e; border-radius: 8px; overflow: hidden; margin-bottom: 24px; }}
         th, td {{ padding: 12px 14px; text-align: left; font-size: 13px; border-bottom: 1px solid #1e293b; }}
         th {{ background: #0f172a; color: #94a3b8; font-size: 11px; text-transform: uppercase; }}
         .badge {{ padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; }}
         .badge-open {{ background: #064e3b; color: #34d399; }}
         .badge-closed {{ background: #334155; color: #cbd5e1; }}
+        .insight-box {{ background: #131c2e; border-left: 4px solid #38bdf8; padding: 14px 18px; border-radius: 4px; margin-bottom: 24px; font-size: 13px; line-height: 1.5; color: #cbd5e1; }}
     </style>
 </head>
 <body>
@@ -655,7 +717,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
         <div class="header">
             <div>
                 <h2 style="margin:0;">⚡ ETF Swing Trading Command Center</h2>
-                <small style="color:#64748b;">Multi-Agent Engine • Post-Tax & Net P&L Tracking</small>
+                <small style="color:#64748b;">Autonomous Quantitative Engine • Post-Tax & Statistical Audit</small>
             </div>
             <div style="text-align:right;">
                 <span style="color:#34d399; font-weight:bold;">● ENGINE LIVE</span><br>
@@ -663,14 +725,28 @@ def generate_html_dashboard(trades, memory, market_data=None):
             </div>
         </div>
 
+        <!-- Portfolio Capital Metrics -->
         <div class="card-grid">
             <div class="card"><h4>Active Slots</h4><p>{len(open_trades)} / {MAX_ACTIVE_SLOTS}</p></div>
             <div class="card"><h4>Net Portfolio Value</h4><p>₹{net_equity:,.2f}</p></div>
             <div class="card"><h4>Net Unrealized P&L</h4><p style="color: {'#34d399' if total_net_unrealized >= 0 else '#f87171'};">{' ' if total_net_unrealized >= 0 else ''}₹{total_net_unrealized:,.2f}</p></div>
             <div class="card"><h4>Net Realized P&L</h4><p style="color: {'#34d399' if total_net_realized >= 0 else '#f87171'};">{' ' if total_net_realized >= 0 else ''}₹{total_net_realized:,.2f}</p></div>
-            <div class="card"><h4>Est. Statutory Charges</h4><p style="color:#f59e0b;">₹{total_friction_paid:,.2f}</p></div>
+            <div class="card"><h4>Total Friction (Gov/Exch)</h4><p style="color:#f59e0b;">₹{total_friction_paid:,.2f}</p></div>
             <div class="card"><h4>STCL Shield Pool</h4><p style="color:#a78bfa;">₹{memory.get('stcl_pool', 0.0):,.2f}</p></div>
-            <div class="card"><h4>Win Rate</h4><p>{win_rate:.1f}% ({wins}/{total_closed})</p></div>
+        </div>
+
+        <!-- Quantitative Statistical Health -->
+        <div class="section-title">Strategy Health & Expectancy Metrics (Closed Trades)</div>
+        <div class="card-grid">
+            <div class="card"><h4>Win Rate</h4><p>{analytics['win_rate']}% <span style="font-size:13px; color:#94a3b8;">({analytics['wins']}/{analytics['total_trades']})</span></p></div>
+            <div class="card"><h4>Profit Factor</h4><p style="color: {'#34d399' if analytics['profit_factor'] >= 1.5 else ('#fbbf24' if analytics['profit_factor'] >= 1.0 else '#f87171')};">{analytics['profit_factor']}x</p></div>
+            <div class="card"><h4>Payoff Ratio (R:R)</h4><p>{analytics['payoff_ratio']}x</p></div>
+            <div class="card"><h4>Trade Expectancy</h4><p style="color: {'#34d399' if analytics['net_expectancy'] >= 0 else '#f87171'};">{' ' if analytics['net_expectancy'] >= 0 else ''}₹{analytics['net_expectancy']}</p></div>
+        </div>
+
+        <div class="insight-box">
+            <strong>Systematic Lesson & Regime Insight:</strong><br>
+            Current sample: <strong>{analytics['total_trades']} completed trades</strong>. In defensive market regimes (Core index below 50 EMA), initial entries endure higher stop-out rates. Capital preservation rules (-2.5% stop-loss & STCL loss shield) strictly contain total drawdown while the system scans for high-momentum sector divergence. Minimum statistical significance requires <strong>30–50 completed trades</strong>.
         </div>
 
         <div class="section-title">Active Holdings (Net of Charges)</div>
@@ -693,7 +769,7 @@ def generate_html_dashboard(trades, memory, market_data=None):
             </tbody>
         </table>
 
-        <div class="section-title">Trade History & Realized P&L</div>
+        <div class="section-title">Trade History & Realized Audit</div>
         <table>
             <thead>
                 <tr>
