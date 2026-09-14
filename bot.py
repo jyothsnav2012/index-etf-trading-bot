@@ -357,28 +357,44 @@ def process_telegram_updates():
 # 4. TRADING HOLIDAY & MARKET CALENDAR SENTINEL
 # ==============================================================================
 
-def get_trading_holidays() -> set:
-    cached = load_json(HOLIDAYS_CACHE_FILE, None)
-    if cached:
-        return set(cached)
-    default_holidays = {
-        "2026-01-26", "2026-03-06", "2026-03-24", "2026-04-03", 
-        "2026-04-14", "2026-05-01", "2026-10-02", "2026-11-09"
-    }
-    save_json(HOLIDAYS_CACHE_FILE, list(default_holidays))
-    return default_holidays
-
-
 def is_market_open() -> bool:
+    """
+    Determines market open status dynamically:
+    1. Rejects weekends immediately (Saturday / Sunday).
+    2. Rejects outside standard market window (09:15 to 15:30 IST).
+    3. Checks live market activity dynamically via latest quote timestamp.
+    """
     now_ist = datetime.now(IST)
+    
+    # 1. Weekend filter
     if now_ist.weekday() >= 5:
         return False
-    if now_ist.strftime("%Y-%m-%d") in get_trading_holidays():
-        return False
+        
+    # 2. Timing filter (09:15 - 15:30 IST)
     market_open = time(9, 15)
     market_close = time(15, 30)
-    return market_open <= now_ist.time() <= market_close
-
+    if not (market_open <= now_ist.time() <= market_close):
+        return False
+        
+    # 3. Dynamic Exchange Activity Check
+    # Fetches today's intraday bar for NIFTY 50 core ETF
+    try:
+        nifty = yf.download("NIFTYBEES.NS", period="1d", interval="1m", progress=False)
+        if nifty.empty:
+            # No trades have occurred today -> Exchange is closed (Holiday)
+            print(f"Sentinel: No market ticks recorded today ({now_ist.strftime('%Y-%m-%d')}). Exchange holiday detected.")
+            return False
+            
+        last_trade_time = nifty.index[-1].to_pydatetime()
+        # Verify if the last recorded tick is from today's date
+        if last_trade_time.date() < now_ist.date():
+            print(f"Sentinel: Last trade date is {last_trade_time.date()} (prior session). Today is an exchange holiday.")
+            return False
+            
+        return True
+    except Exception as e:
+        print(f"⚠️ Dynamic market status check warning: {e}. Defaulting to open during session hours.")
+        return True
 
 # ==============================================================================
 # 5. KITE CONNECT SESSION & LIVE FEED SENTINEL (LTP OVERRIDE)
@@ -821,7 +837,8 @@ def generate_html_dashboard(trades, memory, market_data=None):
 def run_trading_engine():
     now_ist = datetime.now(IST)
     if not is_market_open():
-        print(f"Status: Outside trading hours ({now_ist.strftime('%H:%M IST')}).")
+        print(f"Status: Market is closed ({now_ist.strftime('%A, %Y-%m-%d %H:%M IST')}). Execution skipped.")
+        return # <-- Halts execution before scanning or sending Telegram messages
     
     # 1. Initialize Kite Session safely
     kite = initialize_kite_session()
