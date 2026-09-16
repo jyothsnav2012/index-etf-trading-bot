@@ -19,11 +19,11 @@
         "remaining_units": 1207,
         "sl": 26.91,
         "entry_date": "2026-09-01",
-        "status": "OPEN",
+        "status": "CLOSED",
         "leg1_done": false,
-        "exit_price": null,
-        "exit_date": null,
-        "exit_reason": null
+        "exit_price": 26.8700008392334,
+        "exit_date": "2026-09-16",
+        "exit_reason": "Stop-Loss Hit"
     },
     {
         "symbol": "BANKBEES",
