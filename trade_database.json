@@ -50,5 +50,18 @@
         "exit_price": 322.9700012207031,
         "exit_date": "2026-09-17",
         "exit_reason": "Stop-Loss Hit"
+    },
+    {
+        "symbol": "PHARMABEES",
+        "entry_price": 27.36,
+        "units": 1218,
+        "remaining_units": 1218,
+        "sl": 26.68,
+        "entry_date": "2026-09-17",
+        "status": "OPEN",
+        "leg1_done": false,
+        "exit_price": null,
+        "exit_date": null,
+        "exit_reason": null
     }
 ]
