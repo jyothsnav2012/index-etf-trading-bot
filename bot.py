@@ -495,9 +495,63 @@ def fetch_indicators_and_regime():
     return market_data, regime
 
 
+
 # ==============================================================================
-# 8. AGENT 3 & 4: ALPHA ENGINE & RISK MANAGER
+# 8. AGENTS 2, 3 & 4: AUTONOMOUS ALPHA, RISK & EXECUTION ENGINE
 # ==============================================================================
+
+def execute_autonomous_entry(sym: str, close: float, cluster: str, memory: dict, trades: list) -> bool:
+    """
+    Agent 3 & 4: Sizes position and autonomously executes paper/live allocation.
+    """
+    current_open = [t for t in trades if t.get("status") == "OPEN"]
+    if len(current_open) >= MAX_ACTIVE_SLOTS:
+        return False
+
+    # Dynamic Capital Allocation + STCL Loss Shield
+    stcl_buffer = memory.get("stcl_pool", 0.0) / MAX_ACTIVE_SLOTS
+    slot_capital = (INITIAL_CAPITAL / MAX_ACTIVE_SLOTS) + stcl_buffer
+    qty = int(slot_capital // close)
+
+    if qty <= 0:
+        return False
+
+    stop_loss = round(close * (1.0 - STOP_LOSS_PCT), 2)
+    target_1 = round(close * (1.0 + BASE_TARGET_PCT), 2)
+    current_date_str = datetime.now(IST).strftime("%Y-%m-%d")
+
+    new_trade = {
+        "symbol": sym,
+        "entry_price": close,
+        "units": qty,
+        "remaining_units": qty,
+        "sl": stop_loss,
+        "entry_date": current_date_str,
+        "status": "OPEN",
+        "leg1_done": False,
+        "exit_price": None,
+        "exit_date": None,
+        "exit_reason": None
+    }
+    trades.append(new_trade)
+    save_json(DB_FILE, trades)
+
+    # Dispatch Autonomous Execution Notice
+    execution_msg = (
+        f"🤖 *AUTONOMOUS AGENT EXECUTION: BOUGHT*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📈 *Asset:* `{sym}` ({cluster})\n"
+        f"💰 *Entry Price:* ₹{close:.2f}\n"
+        f"📦 *Position Size:* {qty} units (~₹{(qty * close):,.2f})\n"
+        f"🛑 *Stop-Loss (Hard):* ₹{stop_loss:.2f} (-2.5%)\n"
+        f"🎯 *Target 1 (50% scale):* ₹{target_1:.2f} (+3.5%)\n"
+        f"🛡️ *Shield Applied:* ₹{stcl_buffer:.2f}\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
+    )
+    send_telegram(execution_msg)
+    print(f"✅ Autonomous Agent executed BUY: {sym} x {qty} @ ₹{close:.2f}")
+    return True
+
 
 def manage_positions_and_scan(market_data, regime):
     trades = load_json(DB_FILE, [])
@@ -506,7 +560,7 @@ def manage_positions_and_scan(market_data, regime):
     active_trades = [t for t in trades if t.get("status") == "OPEN"]
     active_clusters = [WATCHLIST[t["symbol"]]["cluster"] for t in active_trades if t["symbol"] in WATCHLIST]
     
-    # --- A. Active Position Management ---
+    # --- Agent 5: Autonomous Position Management & Dynamic Exits ---
     for t in active_trades:
         sym = t["symbol"]
         df = market_data.get(sym)
@@ -525,7 +579,7 @@ def manage_positions_and_scan(market_data, regime):
         if current_price <= 0:
             current_price = entry_price
         
-        # Leg 1: +3.5% Target Hit
+        # Leg 1: Autonomous 50% Profit Realization + Move SL to Breakeven
         if not t.get("leg1_done", False) and current_price >= target:
             half_qty = units // 2
             t["remaining_units"] = units - half_qty
@@ -533,15 +587,13 @@ def manage_positions_and_scan(market_data, regime):
             t["sl"] = entry_price
             save_json(DB_FILE, trades)
             send_telegram(
-                f"🎯 LEG 1 PROFIT BOOKED: {sym}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 *AUTONOMOUS LEG 1 BOOKED: {sym}*\n"
                 f"• Scaled Out: {half_qty} units @ ₹{current_price:.2f} (+3.5%)\n"
-                f"• Remaining: {t['remaining_units']} units running\n"
-                f"• Stop Loss moved to Breakeven: ₹{entry_price:.2f}\n"
-                f"━━━━━━━━━━━━━━━━━━━━"
+                f"• Runner: {t['remaining_units']} units trailing 20 EMA\n"
+                f"• SL Adjusted to Breakeven: ₹{entry_price:.2f}"
             )
 
-        # Leg 2 Runner Exit
+        # Leg 2 Runner: 20 EMA Trailing Exit
         elif t.get("leg1_done", False) and current_price < ema20:
             t["status"] = "CLOSED"
             t["exit_price"] = current_price
@@ -549,11 +601,9 @@ def manage_positions_and_scan(market_data, regime):
             t["exit_reason"] = "Leg 2 Trend Exit (20 EMA)"
             save_json(DB_FILE, trades)
             send_telegram(
-                f"🏆 LEG 2 RUNNER CLOSED: {sym}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🏆 *AUTONOMOUS LEG 2 RUNNER CLOSED: {sym}*\n"
                 f"• Exited Remaining: {rem_units} units @ ₹{current_price:.2f}\n"
-                f"• Exit Trigger: Broke below 20 EMA (₹{ema20:.2f})\n"
-                f"━━━━━━━━━━━━━━━━━━━━"
+                f"• Trigger: Crossed below 20 EMA (₹{ema20:.2f})"
             )
             
         # Hard Stop-Loss Trigger
@@ -567,18 +617,16 @@ def manage_positions_and_scan(market_data, regime):
             save_json(DB_FILE, trades)
             save_json(MEMORY_FILE, memory)
             send_telegram(
-                f"🛑 STOP-LOSS HIT: {sym}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🛑 *AUTONOMOUS STOP-LOSS HIT: {sym}*\n"
                 f"• Exited: {rem_units} units @ ₹{current_price:.2f}\n"
-                f"• Realized Loss: ₹{loss_amount:.2f}\n"
-                f"• STCL Shield Added: ₹{(loss_amount * STCL_SET_ASIDE_PCT):.2f}\n"
-                f"━━━━━━━━━━━━━━━━━━━━"
+                f"• Realized Loss: -₹{loss_amount:.2f}\n"
+                f"• Added to Tax Shield: +₹{(loss_amount * STCL_SET_ASIDE_PCT):.2f}"
             )
 
-    # --- B. Opportunity Scanner ---
+    # --- Agent 2: Opportunity Scanner & Direct Execution Router ---
     current_open_trades = [t for t in trades if t.get("status") == "OPEN"]
     available_slots = MAX_ACTIVE_SLOTS - len(current_open_trades)
-    
+
     if available_slots > 0:
         for sym, df in market_data.items():
             if available_slots <= 0:
@@ -598,36 +646,13 @@ def manage_positions_and_scan(market_data, regime):
             if close <= 0 or ema20 <= 0 or ema50 <= 0:
                 continue
             
+            # Quantitative Entry Filter
             if (close > ema50) and (abs(close - ema20) / close <= 0.015) and (40.0 <= rsi <= 60.0):
-                slot_capital = (INITIAL_CAPITAL / MAX_ACTIVE_SLOTS) + (memory.get("stcl_pool", 0.0) / MAX_ACTIVE_SLOTS)
-                qty = int(slot_capital // close)
-                stop_loss = round(close * (1.0 - STOP_LOSS_PCT), 2)
-                target_1 = round(close * (1.0 + BASE_TARGET_PCT), 2)
-                
-                if qty > 0:
-                    inline_keyboard = {
-                        "inline_keyboard": [
-                            [
-                                {"text": f"🟢 BUY {qty} units", "callback_data": f"BUY:{sym}:{round(close, 2)}:{qty}:{stop_loss}"},
-                                {"text": "⚪ PASS", "callback_data": f"PASS:{sym}"}
-                            ]
-                        ]
-                    }
-
-                    signal_card = (
-                        f"⚡ NEW SWING SIGNAL DETECTED\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📈 Symbol: {sym} ({cluster})\n"
-                        f"💰 Entry: ₹{close:.2f}\n"
-                        f"🛑 Stop Loss: ₹{stop_loss:.2f} (-2.5%)\n"
-                        f"🎯 Target 1: ₹{target_1:.2f} (+3.5%)\n"
-                        f"📦 Position Size: {qty} units (~₹{(qty * close):,.2f})\n"
-                        f"📊 RSI 14: {rsi:.1f}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━"
-                    )
-
-                    send_telegram(signal_card, reply_markup=inline_keyboard)
+                executed = execute_autonomous_entry(sym, close, cluster, memory, trades)
+                if executed:
                     available_slots -= 1
+                    active_clusters.append(cluster)
+
 
 
 # ==============================================================================
@@ -920,5 +945,18 @@ def run_trading_engine():
 # ==============================================================================
 
 if __name__ == "__main__":
-    process_telegram_updates()
-    run_trading_engine()
+    print("🚀 Initializing Autonomous ETF Swing Agent...")
+    while True:
+        try:
+            # Process incoming status commands (/status, /pnl)
+            process_telegram_updates()
+            
+            # Execute analysis, exits, and entries
+            run_trading_engine()
+            
+        except Exception as err:
+            print(f"⚠️ Engine exception: {err}")
+            
+        # Sleep for 60 seconds during market hours, or 10 minutes outside market hours
+        sleep_duration = 60 if is_market_open() else 600
+        time_module.sleep(sleep_duration)
