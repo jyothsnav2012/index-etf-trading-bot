@@ -71,11 +71,11 @@
     "remaining_units": 265,
     "sl": 122.63,
     "entry_date": "2026-09-21",
-    "status": "OPEN",
+    "status": "CLOSED",
     "leg1_done": false,
-    "exit_price": null,
-    "exit_date": null,
-    "exit_reason": null
+    "exit_price": 120.95999908447266,
+    "exit_date": "2026-09-28",
+    "exit_reason": "Stop-Loss Hit"
   },
   {
     "symbol": "SILVERBEES",
@@ -84,10 +84,10 @@
     "remaining_units": 149,
     "sl": 217.05,
     "entry_date": "2026-09-21",
-    "status": "OPEN",
+    "status": "CLOSED",
     "leg1_done": false,
-    "exit_price": null,
-    "exit_date": null,
-    "exit_reason": null
+    "exit_price": 210.27000427246094,
+    "exit_date": "2026-09-28",
+    "exit_reason": "Stop-Loss Hit"
   }
 ]
