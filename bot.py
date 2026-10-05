@@ -132,9 +132,9 @@ def is_market_open() -> bool:
     if now_ist.weekday() >= 5:
         return False
 
-    # 2. Market window filter (09:15 - 15:30 IST)
+    # 2. Allow execution up to 16:00 IST for post-market settling & summary dispatch
     market_open = time(9, 15)
-    market_close = time(15, 30)
+    market_close = time(16, 0)
     if not (market_open <= now_ist.time() <= market_close):
         return False
 
