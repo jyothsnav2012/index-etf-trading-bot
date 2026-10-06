@@ -89,5 +89,18 @@
     "exit_price": 210.27000427246094,
     "exit_date": "2026-09-28",
     "exit_reason": "Stop-Loss Hit"
+  },
+  {
+    "symbol": "MON100",
+    "entry_price": 330.95001220703125,
+    "units": 101,
+    "remaining_units": 101,
+    "sl": 322.68,
+    "entry_date": "2026-10-06",
+    "status": "OPEN",
+    "leg1_done": false,
+    "exit_price": null,
+    "exit_date": null,
+    "exit_reason": null
   }
 ]
