@@ -58,11 +58,11 @@
     "remaining_units": 1218,
     "sl": 26.68,
     "entry_date": "2026-09-17",
-    "status": "OPEN",
+    "status": "CLOSED",
     "leg1_done": false,
-    "exit_price": null,
-    "exit_date": null,
-    "exit_reason": null
+    "exit_price": 26.559999465942383,
+    "exit_date": "2026-10-08",
+    "exit_reason": "Stop-Loss Hit"
   },
   {
     "symbol": "GOLDBEES",
